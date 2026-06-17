@@ -1,0 +1,26 @@
+# Install these only after confirming your environment already has ROCm PyTorch.
+# Do not install torch from this file; use the cloud image's ROCm torch build.
+accelerate
+datasets
+fire
+jieba
+llamafactory
+loguru
+modelscope
+omegaconf
+openai
+pandas
+peft
+presidio-analyzer[transformers]
+presidio-anonymizer
+pydantic
+pyjson5
+rich
+rouge-chinese
+safetensors
+sentencepiece
+spacy
+tensorboard
+tqdm
+transformers
+trl

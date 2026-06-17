@@ -1,0 +1,27 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+
+# Secrets and local API configs.
+.env
+.env.*
+
+# Upstream extraction checkout and raw generated corpus.
+extract-dialogue/
+
+# Full role dataset is kept local; publish only qixia_sample.
+role_data/qixia/
+
+# Cloud/runtime outputs.
+logs/
+model_output*/
+adapter*/
+checkpoint*/
+runs/
+wandb/
+*.log
