@@ -1,6 +1,6 @@
 {
   "qixia_train": {
-    "file_name": "qixia_train.json",
+    "file_name": "qixia_chat_train.json",
     "formatting": "sharegpt",
     "columns": {
       "messages": "conversations",
@@ -14,7 +14,7 @@
     }
   },
   "qixia_valid": {
-    "file_name": "qixia_valid.json",
+    "file_name": "qixia_chat_valid.json",
     "formatting": "sharegpt",
     "columns": {
       "messages": "conversations",
