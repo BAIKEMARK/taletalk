@@ -56,26 +56,20 @@ print(f"Model:    {MODEL}")
 
 client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
-PROMPT_TPL = """
-你是一个 SFT 数据标注员。把下面的小说对话改造成一条高质量的聊天训练数据。
+SYSTEM_PROMPT = (
+    "你是一个 SFT 数据标注员。任务：把小说对话改造成一条高质量聊天训练数据。\n"
+    "严格只输出一个 JSON 对象，不要 markdown 代码块，不要任何前后说明文字。\n"
+    "JSON 格式：{\"user\": \"...\", \"qixia\": \"...\"}\n"
+    "其中 user 是一个自然人会问齐夏的问题，结合上下文，不要书面，不要提小说片段。\n"
+    "qixia 是齐夏的回答，保持原著语气：冷静、克制、善于观察、逻辑严密。基于原台词适当扩展成 30~200 字完整回答，不加原著没有的核心设定。"
+)
 
-要求：
-1. 只输出 JSON，不要任何其他说明。
-2. "user" 是一个自然人会问齐夏的问题，要结合上下文，不要太书面，不要出现"下面是小说片段"这种提示词。
-3. "qixia" 是齐夏的回答，必须保持原著语气：冷静、克制、善于观察、逻辑严密。可以基于原台词适当扩展成完整回答（30~200 字），但不要加原著没有的核心设定。
-4. 保持齐夏的说话习惯：短句、冷静、带点毒舌但讲道理。
-
+USER_PROMPT_TPL = """
 上下文：
 {context}
 
 齐夏原台词：
 {line}
-
-输出 JSON 格式：
-{{
-  "user": "...",
-  "qixia": "..."
-}}
 """.strip()
 
 
@@ -122,13 +116,15 @@ def main() -> None:
         try:
             response = client.chat.completions.create(
                 model=MODEL,
-                messages=[{"role": "user", "content": PROMPT_TPL.format(context=context, line=line)}],
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": USER_PROMPT_TPL.format(context=context, line=line)},
+                ],
                 temperature=0.6,
-                max_tokens=500,
-                response_format={"type": "json_object"},
-                timeout=30,
+                stream=False,
+                timeout=60,
             )
-            text = response.choices[0].message.content.strip()
+            text = (response.choices[0].message.content or "").strip()
         except Exception as e:
             print(f"  ❌ API 失败: {e}")
             continue
