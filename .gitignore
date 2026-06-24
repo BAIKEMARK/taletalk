@@ -10,9 +10,7 @@ env/
 # Secrets and local API configs.
 .env
 .env.*
-
-# Upstream extraction checkout and raw generated corpus.
-extract-dialogue/
+!.env.example
 
 # Legacy local role-data scratch directories.
 role_data/
@@ -27,3 +25,9 @@ checkpoint*/
 runs/
 wandb/
 *.log
+
+# Extraction runtime caches.
+/cache/
+/data/raw/
+# Extraction runtime log
+dialogue_extractor.log

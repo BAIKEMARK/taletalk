@@ -1,0 +1,6 @@
+# 仅抽取阶段（01_extract.ipynb）需要的依赖。
+# 不包含 torch / transformers, 避免污染训练镜像。
+openai>=1.30.0
+python-dotenv>=1.0.0
+tiktoken>=0.7.0
+tqdm>=4.65.0
