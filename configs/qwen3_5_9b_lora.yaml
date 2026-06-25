@@ -15,7 +15,7 @@ lora_dropout: 0.05
 dataset: qixia_train
 eval_dataset: qixia_valid
 dataset_dir: data
-template: qwen
+template: qwen3_5
 cutoff_len: 1024
 overwrite_cache: true
 preprocessing_num_workers: 4

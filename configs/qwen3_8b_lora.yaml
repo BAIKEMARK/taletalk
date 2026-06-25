@@ -1,5 +1,5 @@
 ### model
-model_name_or_path: Qwen/Qwen3.6-35B-A3B
+model_name_or_path: Qwen/Qwen3-8B
 trust_remote_code: true
 
 ### method
@@ -15,30 +15,32 @@ lora_dropout: 0.05
 dataset: qixia_train
 eval_dataset: qixia_valid
 dataset_dir: data
-template: qwen3_6
-cutoff_len: 2048
+template: qwen3
+cutoff_len: 1024
 overwrite_cache: true
 preprocessing_num_workers: 4
 
 ### output
-output_dir: /network-workspace/qixia-rocm-lora/outputs/qwen3_6_35b_a3b_lora
+output_dir: /network-workspace/qixia-rocm-lora/outputs/qwen3_8b_lora
 logging_dir: /network-workspace/qixia-rocm-lora/logs
 logging_steps: 5
 save_steps: 100
 plot_loss: true
 overwrite_output_dir: true
+disable_tqdm: false
+report_to: none
 
 ### train
-per_device_train_batch_size: 1
+per_device_train_batch_size: 4
 per_device_eval_batch_size: 1
-gradient_accumulation_steps: 8
-learning_rate: 8.0e-5
+gradient_accumulation_steps: 4
+learning_rate: 1.0e-4
 num_train_epochs: 1.0
 lr_scheduler_type: cosine
 warmup_ratio: 0.05
 bf16: true
 fp16: false
-gradient_checkpointing: true
+gradient_checkpointing: false
 ddp_timeout: 180000000
 
 ### eval
