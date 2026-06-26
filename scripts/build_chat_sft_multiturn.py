@@ -60,13 +60,13 @@ def group_by_chunk(lines: Iterable[dict]) -> dict[int, list[dict]]:
 
 def build_conversation(
     chunk_lines: list[dict],
-    target_role: str,
+    target_roles: set[str],
 ) -> list[dict] | None:
     """Return ShareGPT conversations list, or None to drop this chunk."""
-    if not any(line["role"] == target_role for line in chunk_lines):
+    if not any(line["role"] in target_roles for line in chunk_lines):
         return None
     # Skip chunks that lead with the target role (no human context).
-    if chunk_lines[0]["role"] == target_role:
+    if chunk_lines[0]["role"] in target_roles:
         return None
 
     conversations: list[dict] = []
@@ -80,7 +80,7 @@ def build_conversation(
                 conversations.append({"from": buf_side, "value": text})
 
     for line in chunk_lines:
-        side = "gpt" if line["role"] == target_role else "human"
+        side = "gpt" if line["role"] in target_roles else "human"
         # Format other roles as "角色名：内容" so the model sees who is speaking.
         if side == "human":
             piece = f"{line['role']}：{line['dialogue'].strip()}"
@@ -113,7 +113,15 @@ def build_conversation(
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True, help="dialogues jsonl from extract module")
-    ap.add_argument("--target-role", required=True, help="character name, e.g. 齐夏")
+    ap.add_argument(
+        "--target-role",
+        required=True,
+        help=(
+            "character name(s). Comma-separated list of aliases all referring to "
+            "the same character, e.g. '孙悟空,悟空,行者,大圣,齐天大圣,猴王,孙行者,美猴王'. "
+            "First name is used as the canonical name in the system prompt."
+        ),
+    )
     ap.add_argument("--run-name", required=True, help="dataset prefix, e.g. shiri_qixia")
     ap.add_argument("--novel-title", default="", help="novel title used in system prompt")
     ap.add_argument("--out-dir", required=True, help="output directory")
@@ -131,10 +139,17 @@ def main() -> int:
     buckets = group_by_chunk(lines)
     print(f"grouped into {len(buckets)} chunks")
 
+    role_aliases = [r.strip() for r in args.target_role.split(",") if r.strip()]
+    assert role_aliases, "--target-role 不能为空"
+    target_roles = set(role_aliases)
+    canonical_role = role_aliases[0]
+    if len(role_aliases) > 1:
+        print(f"target role canonical={canonical_role}  aliases={role_aliases[1:]}")
+
     novel_phrase = f"《{args.novel_title}》中的" if args.novel_title else ""
     system_prompt = (
-        f"你正在扮演{novel_phrase}{args.target_role}。"
-        f"严格保持{args.target_role}的语气、性格、说话习惯和价值观，"
+        f"你正在扮演{novel_phrase}{canonical_role}。"
+        f"严格保持{canonical_role}的语气、性格、说话习惯和价值观，"
         f"根据对话上下文自然回应，不要跳出角色，不要续写其他角色的发言。"
     )
 
@@ -144,13 +159,13 @@ def main() -> int:
     dropped_short = 0
     for cid in sorted(buckets):
         chunk_lines = buckets[cid]
-        if not any(l["role"] == args.target_role for l in chunk_lines):
+        if not any(l["role"] in target_roles for l in chunk_lines):
             dropped_no_target += 1
             continue
-        if chunk_lines[0]["role"] == args.target_role:
+        if chunk_lines[0]["role"] in target_roles:
             dropped_lead += 1
             continue
-        conv = build_conversation(chunk_lines, args.target_role)
+        conv = build_conversation(chunk_lines, target_roles)
         if conv is None:
             dropped_short += 1
             continue
@@ -160,6 +175,11 @@ def main() -> int:
             "conversations": conv,
         })
 
+    # alias 命中统计, 帮助用户判断别名覆盖
+    from collections import Counter
+    alias_hits = Counter(l["role"] for l in lines if l["role"] in target_roles)
+    if alias_hits:
+        print("alias hits in raw dialogues: " + ", ".join(f"{k}={v}" for k, v in alias_hits.most_common()))
     print(f"kept {len(samples)} multi-turn samples")
     print(f"dropped: no_target={dropped_no_target} leads_with_target={dropped_lead} too_short={dropped_short}")
 
