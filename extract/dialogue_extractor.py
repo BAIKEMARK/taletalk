@@ -7,6 +7,7 @@
 
 import os
 import json
+import re
 import time
 import logging
 import threading
@@ -359,39 +360,66 @@ class DialogueExtractor:
                     logger.error("API调用重试次数已用完")
                     raise
     
+    @staticmethod
+    def _extract_json_payload(response: str) -> str:
+        """从模型响应中提取 JSON 片段。
+
+        本地小模型经常把 JSON 包在 ```json ... ``` 里，或者前后带解释文字。
+        策略：
+          1) 优先抓 ```json ... ``` / ``` ... ``` 代码块内容
+          2) 退化为抓首个完整的 [...] 或 {...}
+          3) 都不行就返回原文（让 json.loads 自己抛错）
+        """
+        if not response:
+            return response
+        text = response.strip()
+        # 1) fenced code block
+        m = re.search(r"```(?:json|JSON)?\s*(.*?)\s*```", text, re.DOTALL)
+        if m:
+            return m.group(1).strip()
+        # 2) first balanced array / object — 简单贪婪到最后一个右括号
+        for open_ch, close_ch in [('[', ']'), ('{', '}')]:
+            i = text.find(open_ch)
+            j = text.rfind(close_ch)
+            if i != -1 and j != -1 and j > i:
+                return text[i:j+1].strip()
+        return text
+
     def _parse_and_validate_response(self, response: str) -> List[DialogueItem]:
         """解析并验证API响应"""
+        payload = self._extract_json_payload(response)
         try:
-            data = json.loads(response)
-            if not isinstance(data, list):
-                logger.warning("响应不是列表格式，尝试转换")
-                if isinstance(data, dict) and 'script' in data:
-                    data = data['script']
-                else:
-                    return []
-            
-            dialogues = []
-            for item in data:
-                if isinstance(item, dict) and 'role' in item and 'dialogue' in item:
-                    dialogue = DialogueItem(
-                        role=str(item['role']).strip(),
-                        dialogue=str(item['dialogue']).strip()
-                    )
-                    
-                    # 验证内容不为空
-                    if dialogue.role and dialogue.dialogue:
-                        dialogues.append(dialogue)
-                    else:
-                        logger.warning(f"跳过空对话项: {item}")
-                else:
-                    logger.warning(f"跳过无效对话项: {item}")
-            
-            return dialogues
-            
+            data = json.loads(payload)
         except json.JSONDecodeError as e:
             logger.error(f"JSON解析失败: {e}")
-            logger.debug(f"原始响应: {response}")
+            preview = (response or '')[:400].replace('\n', ' | ')
+            logger.error(f"原始响应预览: {preview}")
             return []
+
+        if not isinstance(data, list):
+            if isinstance(data, dict) and 'script' in data and isinstance(data['script'], list):
+                data = data['script']
+            elif isinstance(data, dict) and 'role' in data and 'dialogue' in data:
+                data = [data]
+            else:
+                logger.warning(f"响应不是列表格式: type={type(data).__name__}")
+                return []
+
+        dialogues = []
+        for item in data:
+            if isinstance(item, dict) and 'role' in item and 'dialogue' in item:
+                dialogue = DialogueItem(
+                    role=str(item['role']).strip(),
+                    dialogue=str(item['dialogue']).strip()
+                )
+                if dialogue.role and dialogue.dialogue:
+                    dialogues.append(dialogue)
+                else:
+                    logger.warning(f"跳过空对话项: {item}")
+            else:
+                logger.warning(f"跳过无效对话项: {item}")
+
+        return dialogues
     
     def _remove_duplicates(self, dialogues: List[DialogueItem]) -> List[DialogueItem]:
         """移除重复对话"""
