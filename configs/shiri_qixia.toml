@@ -1,0 +1,49 @@
+# TaleTalk config: 《十日终焉》 / 齐夏
+# 小说全文不提交到 GitHub。请把 txt 放到:
+#   novels/《十日终焉》（校对全本）.txt
+
+novel_txt = "novels/《十日终焉》（校对全本）.txt"
+target_role = "齐夏,老齐,齐哥,小齐"
+novel_title = "十日终焉"
+run_name = "shiri_qixia"
+
+model_choice = "qwen3_5_9b"
+model_ids = { "qwen3_5_9b" = "Qwen/Qwen3.5-9B", "qwen3_5_27b" = "Qwen/Qwen3.5-27B", "qwen3_6_35b_a3b" = "Qwen/Qwen3.6-35B-A3B", "qwen3_8b" = "Qwen/Qwen3-8B" }
+
+extraction_backend = "local_model"
+
+llm_platform = "custom"
+custom_base_url = "https://api.stepfun.com/step_plan/v1"
+custom_api_key = ""
+custom_model_name = "step-3.7-flash"
+
+local_model_id_override = ""
+local_model_port = 8000
+vllm_gpu_util = 0.85
+max_workers = 6
+chunk_size_tokens = 1500
+
+valid_ratio = 0.05
+max_conversations = 0
+seed = 42
+
+per_device_train_batch_size = 4
+gradient_accumulation_steps = 4
+learning_rate = 1e-4
+num_train_epochs = 1.0
+lora_rank = 8
+lora_alpha = 16
+lora_dropout = 0.05
+cutoff_len = 1024
+warmup_ratio = 0.05
+lr_scheduler_type = "cosine"
+logging_steps = 5
+save_steps = 100
+eval_steps = 100
+gradient_checkpointing = false
+model_cache_dir = "/network-workspace/models"
+output_dir = "/network-workspace/outputs"
+
+gradio_port = 7860
+share = false
+stream_output = true

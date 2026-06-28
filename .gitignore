@@ -31,3 +31,7 @@ wandb/
 /data/raw/
 # Extraction runtime log
 dialogue_extractor.log
+
+# Local/private novel texts. Keep only the public-domain demo novel in git.
+novels/*.txt
+!novels/西游记白话文.txt
