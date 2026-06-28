@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import gradio as gr
 import torch

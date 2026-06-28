@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import json
 import random
 from collections import Counter
 from pathlib import Path
+from typing import List
 from .config import Config
 from .utils import init_logger, check_step_done, mark_step_done, run_with_progress
 

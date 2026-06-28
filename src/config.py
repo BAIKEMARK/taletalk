@@ -1,4 +1,9 @@
-import tomllib
+from __future__ import annotations
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python < 3.11
+    import tomli as tomllib
 from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass

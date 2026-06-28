@@ -4,10 +4,23 @@ import argparse
 import sys
 from src.config import load_config
 from src.utils import clear_step_status, init_logger
-from src.extract import run_extract
-from src.build_sft import run_build_sft
-from src.train import run_train
-from src.infer import run_infer
+
+
+def load_step_fn(step_name: str):
+    """Lazy-load step modules so optional train/infer deps don't block startup."""
+    if step_name == "extract":
+        from src.extract import run_extract
+        return run_extract
+    if step_name == "build_sft":
+        from src.build_sft import run_build_sft
+        return run_build_sft
+    if step_name == "train":
+        from src.train import run_train
+        return run_train
+    if step_name == "infer":
+        from src.infer import run_infer
+        return run_infer
+    raise ValueError(f"未知步骤: {step_name}")
 
 def main():
     parser = argparse.ArgumentParser(description="TaleTalk - 让小说角色活起来")
@@ -37,17 +50,18 @@ def main():
             clear_step_status(step, config.status_dir)
     
     steps = [
-        ("extract", run_extract, "抽取对话"),
-        ("build_sft", run_build_sft, "构建SFT数据集"),
-        ("train", run_train, "训练LoRA"),
-        ("infer", run_infer, "启动推理服务"),
+        ("extract", "抽取对话"),
+        ("build_sft", "构建SFT数据集"),
+        ("train", "训练LoRA"),
+        ("infer", "启动推理服务"),
     ]
     
-    for step_name, step_fn, step_desc in steps:
+    for step_name, step_desc in steps:
         if args.only and step_name != args.only:
             continue
         
         try:
+            step_fn = load_step_fn(step_name)
             main_logger.info(f">>>>> 开始{step_desc} <<<<<")
             step_fn(config)
             main_logger.info(f">>>>> {step_desc}完成 <<<<<")

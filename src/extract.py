@@ -1,4 +1,8 @@
+from __future__ import annotations
+
 import os
+import signal
+import sys
 import time
 import json
 import socket
@@ -81,10 +85,6 @@ def _start_vllm_server(logger, config):
     ready = False
     
     while time.time() - start_time < max_wait:
-        if proc.poll() is not None:
-            logger.error(f"vLLM服务异常退出，退出码: {proc.returncode}")
-            raise RuntimeError("vLLM服务启动失败")
-        
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/models", timeout=2) as r:
                 if r.status == 200:
@@ -92,6 +92,10 @@ def _start_vllm_server(logger, config):
                     break
         except Exception:
             pass
+        if proc.poll() is not None:
+            logger.warning(
+                f"vLLM wrapper进程已退出(rc={proc.returncode})，继续等待EngineCore子进程开放端口"
+            )
         
         elapsed = int(time.time() - start_time)
         if elapsed > 0 and elapsed % 20 == 0:

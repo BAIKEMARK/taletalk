@@ -1,9 +1,28 @@
+from __future__ import annotations
+
 import os
-import yaml
+import json
+import time
 import subprocess
 from pathlib import Path
 from .config import Config
-from .utils import init_logger, check_step_done, mark_step_done, run_with_progress
+from .utils import init_logger, check_step_done, mark_step_done
+
+
+def _modelscope_cache_dir(cache_dir: Path, model_id: str) -> Path:
+    """Return ModelScope's default snapshot dir for a model id."""
+    return cache_dir / model_id.replace(".", "___")
+
+
+def _template_for_model(model_id: str) -> str:
+    model_id_lower = model_id.lower()
+    if "qwen3.5" in model_id_lower or "qwen3___5" in model_id_lower:
+        return "qwen3_5"
+    if "qwen3.6" in model_id_lower or "qwen3___6" in model_id_lower:
+        return "qwen3_6"
+    if "qwen3" in model_id_lower:
+        return "qwen3"
+    return "qwen"
 
 def run_train(config: Config) -> None:
     """训练角色LoRA"""
@@ -19,11 +38,17 @@ def run_train(config: Config) -> None:
     logger.info(f"训练集: {config.train_json}")
     logger.info(f"验证集: {config.valid_json}")
     logger.info(f"输出目录: {config.output_dir}/{config.run_name}")
+    try:
+        import yaml
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("缺少 PyYAML，请先运行: pip install pyyaml") from exc
     
     # 生成LLaMA Factory训练配置
+    cached_model_dir = _modelscope_cache_dir(config.model_cache_dir, config.model_id)
+    model_name_or_path = str(cached_model_dir) if (cached_model_dir / "config.json").exists() else config.model_id
     cfg = {
-        "model_name_or_path": str(config.model_cache_dir / config.model_id.replace('/', '_').replace('.', '_') if (config.model_cache_dir / config.model_id.replace('/', '_').replace('.', '_')).exists() else config.model_id,
-        "template": "qwen3_5" if "qwen3_5 in config.model_id.lower() else "qwen3_6" if "qwen3_6" in config.model_id.lower() else "qwen3",
+        "model_name_or_path": model_name_or_path,
+        "template": _template_for_model(model_name_or_path),
         "dataset": "taletalk_custom",
         "dataset_dir": str(config.sft_dir),
         "output_dir": str(config.output_dir / config.run_name),
