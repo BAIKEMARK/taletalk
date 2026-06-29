@@ -1,613 +1,608 @@
-# Memory RAFT Qixia Implementation Plan
+# 齐夏完整场景记忆 + RAFT 数据生成实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **给后续执行者的要求：** 按任务顺序实现。每个任务都要先写可验证测试或冒烟命令，再写实现。不要运行 ROCm 训练。本计划取代旧的“台词记忆 v1”计划。
 
-**Goal:** Add the first memory-first TaleTalk path for Qixia without running ROCm training: build character memory, retrieve it, generate RAFT/mixed SFT data, and smoke-test the local data path.
+**目标：** 为《十日终焉》齐夏构建一条更符合第一性原理的训练数据管线：从原始小说文本生成完整场景记忆，用混合检索组织证据，用强模型生成并审核 RAFT 数据，让后续 LoRA 学会“像齐夏一样使用记忆回答”。
 
-**Architecture:** Preserve the user-facing lifecycle but replace dialogue-only internals with a memory-first contract. Implement focused modules for profile loading, scene memory construction, BM25 retrieval, shared prompt assembly, and RAFT SFT generation; then wire them into the CLI as independently runnable steps.
+**核心判断：** 旧的 `原始对话 -> 台词记忆 -> BM25 -> RAFT` 只能验证管线，不是最终方向。真正的知识主体应来自原始小说全文；原始对话 JSONL 是辅助对齐和提取齐夏原话的结构化标注。
 
-**Tech Stack:** Python 3.11+/stdlib, existing TOML config loader, existing dialogue JSONL output, pytest. Use a lightweight in-repo BM25 implementation first to avoid adding a dependency.
+**技术栈：** Python 3.11+、现有 TOML 配置、StepFun/OpenAI 兼容 API、pytest、numpy、sentence-transformers 或可替换语义向量后端、可选重排模型。训练仍由云端 LLaMA Factory 执行，本计划不跑训练。
 
 ---
 
-## File Structure
+## 0. 第一性原理
 
-- Create `src/memory.py`: scene memory dataclasses, profile dataclass, scene builder from raw dialogue JSONL and optional chunk text, JSONL read/write helpers.
-- Create `src/retrieval.py`: tokenizer, in-repo BM25 index, save/load index, retrieval API.
-- Create `src/prompting.py`: shared roleplay system prompt builder used by RAFT SFT and inference.
-- Create `src/build_raft_sft.py`: build style/RAFT/mixed ShareGPT datasets from raw dialogues plus memory/profile.
-- Modify `src/config.py`: add memory and RAFT config fields and output paths.
-- Modify `config.example.toml`: document new memory/RAFT options.
-- Modify `main.py` and step orchestration files if needed: add `build_memory` and memory-aware `build_sft`.
-- Modify `src/infer.py`: optional memory retrieval before generation.
-- Add tests under `tests/` for memory building, retrieval, prompt parity, and RAFT SFT output.
+我们要训练的不是“会复述台词的模型”，而是“一个能扮演小说角色的系统”。
 
-## Task 1: Config Contract
+角色系统需要同时满足：
 
-**Files:**
-- Modify: `src/config.py`
-- Modify: `config.example.toml`
-- Test: `tests/test_config_memory.py`
+- **像本人：** 语气、判断方式、价值观、回应节奏像齐夏。
+- **有记忆：** 能基于小说证据回答自己的经历、关系、动机。
+- **有边界：** 不使用齐夏本人不该知道的旁白或读者视角知识。
+- **能对话：** 能处理用户新问题、追问、错误前提和资料不足场景。
 
-- [ ] **Step 1: Write failing config test**
+因此职责必须分开：
 
-```python
-from pathlib import Path
+- **记忆库：** 保存小说事实和证据。
+- **角色设定卡：** 保存角色身份、性格、说话规则和认知边界。
+- **检索器：** 在用户问题下找出可支撑回答的记忆。
+- **LoRA：** 学习齐夏的表达、判断方式，以及如何按协议使用记忆。
+- **审核器：** 在数据生成阶段过滤无证据、跑偏、复述、越界样本。
 
-from src.config import load_config
+## 1. 最终目标架构
 
-
-def test_memory_config_defaults(tmp_path, monkeypatch):
-    repo = tmp_path
-    (repo / "extract").mkdir()
-    (repo / "src").mkdir()
-    (repo / "novels").mkdir()
-    (repo / "novels" / "novel.txt").write_text("hello", encoding="utf-8")
-    (repo / "config.toml").write_text(
-        '''
-novel_txt = "novels/novel.txt"
-target_role = "齐夏,阿夏"
-novel_title = "十日终焉"
-run_name = "shiri_qixia"
-model_choice = "qwen3_5_9b"
-model_ids = { "qwen3_5_9b" = "Qwen/Qwen3.5-9B" }
-extraction_backend = "cloud_api"
-llm_platform = "custom"
-custom_base_url = ""
-custom_api_key = ""
-custom_model_name = ""
-local_model_id_override = ""
-local_model_port = 8000
-vllm_gpu_util = 0.85
-max_workers = 2
-chunk_size_tokens = 1000
-valid_ratio = 0.05
-max_conversations = 0
-seed = 42
-per_device_train_batch_size = 1
-gradient_accumulation_steps = 1
-learning_rate = 1e-4
-num_train_epochs = 1.0
-lora_rank = 8
-lora_alpha = 16
-lora_dropout = 0.05
-cutoff_len = 2048
-warmup_ratio = 0.05
-lr_scheduler_type = "cosine"
-logging_steps = 5
-save_steps = 100
-eval_steps = 100
-gradient_checkpointing = false
-model_cache_dir = "models"
-output_dir = "outputs"
-gradio_port = 7860
-share = false
-stream_output = true
-adapter_dir = ""
-enable_memory = true
-memory_backend = "bm25"
-top_k_memory = 3
-max_memory_chars = 1800
-max_one_scene_chars = 600
-prefer_target_present = true
-exclude_narrator_only = true
-sft_mode = "mixed"
-style_data_ratio = 0.35
-raft_data_ratio = 0.65
-raft_include_distractors = true
-raft_no_answer_ratio = 0.1
-roleplay_mode = "in_character"
-''',
-        encoding="utf-8",
-    )
-    monkeypatch.chdir(repo)
-
-    cfg = load_config("config.toml")
-
-    assert cfg.enable_memory is True
-    assert cfg.memory_backend == "bm25"
-    assert cfg.profile_json.name == "shiri_qixia_profile.json"
-    assert cfg.scene_memory_jsonl.name == "shiri_qixia_scenes.jsonl"
-    assert cfg.raft_train_json.name == "shiri_qixia_raft_train.json"
+```text
+小说原文
++ 原始对话 jsonl
+-> 完整场景记忆
+-> 角色设定卡 / 关系状态 / 认知边界标签
+-> BM25 精确召回 + 语义向量召回 + 重排
+-> 教师模型生成 RAFT 样本
+-> 审核器过滤后的数据集
+-> 后续在 ROCm 上训练 LoRA
+-> 运行时智能体使用同一套记忆协议
 ```
 
-- [ ] **Step 2: Run failing test**
+运行时智能体：
 
-Run: `pytest tests/test_config_memory.py -q`
-
-Expected: fail because memory config fields do not exist.
-
-- [ ] **Step 3: Implement config fields**
-
-Add dataclass fields and derived paths:
-
-```python
-enable_memory: bool
-memory_backend: str
-top_k_memory: int
-max_memory_chars: int
-max_one_scene_chars: int
-prefer_target_present: bool
-exclude_narrator_only: bool
-sft_mode: str
-style_data_ratio: float
-raft_data_ratio: float
-raft_include_distractors: bool
-raft_no_answer_ratio: float
-roleplay_mode: str
-profile_json: Path
-scene_memory_jsonl: Path
-memory_index_json: Path
-raft_train_json: Path
-raft_valid_json: Path
+```text
+用户问题
+-> 查询分析器提取实体/别名/事件/追问上下文
+-> BM25 召回专名、原话、规则名
+-> 语义向量召回动机、因果、情绪等语义相关片段
+-> 合并去重
+-> 认知边界过滤器去掉齐夏不该知道的证据
+-> 重排模型选 top 3-5
+-> 提示词组装器拼角色设定 + 记忆片段
+-> LoRA 生成器生成齐夏口吻回答
+-> 可选审核器检查回答是否编造
 ```
 
-Derived paths:
+## 2. 训练数据总体设计
 
-```python
-profile_json = repo_dir / "data" / "profiles" / f"{run_name}_profile.json"
-scene_memory_jsonl = repo_dir / "data" / "memory" / f"{run_name}_scenes.jsonl"
-memory_index_json = repo_dir / "data" / "memory" / f"{run_name}_bm25.json"
-raft_train_json = sft_dir / f"{run_name}_raft_train.json"
-raft_valid_json = sft_dir / f"{run_name}_raft_valid.json"
+训练集不是单一 RAFT 数据，而是混合数据。
+
+推荐比例：
+
+```text
+风格模仿：20%-30%
+有证据的事实/事件 RAFT：30%-35%
+人物关系/动机 RAFT：20%-25%
+多轮追问：10%-15%
+错误前提纠正：8%-10%
+无证据/认知边界：7%-10%
 ```
 
-- [ ] **Step 4: Update example config**
+各类数据作用：
 
-Add the memory/RAFT settings from the architecture spec to `config.example.toml`.
+- **风格模仿：** 学齐夏真实台词风格、节奏、推理语气。
+- **有证据 RAFT：** 学会基于记忆片段回答事实和事件问题。
+- **人物关系/动机：** 学人物关系、动机、长期目标和价值判断。
+- **多轮追问：** 学会连续追问里保持上下文和角色状态。
+- **错误前提纠正：** 学会纠正用户错误前提，不顺着编。
+- **无证据/边界：** 学会资料不足时克制，不编造小说事实。
 
-- [ ] **Step 5: Run test**
+每条高质量 RAFT 样本应该包含：
 
-Run: `pytest tests/test_config_memory.py -q`
-
-Expected: pass.
-
-## Task 2: Memory Builder
-
-**Files:**
-- Create: `src/memory.py`
-- Test: `tests/test_memory_builder.py`
-
-- [ ] **Step 1: Write memory builder tests**
-
-```python
-import json
-
-from src.memory import build_default_profile, build_scene_memories, write_profile, read_profile
-
-
-def test_build_scene_memories_from_dialogue_rows(tmp_path):
-    raw = tmp_path / "raw.jsonl"
-    raw.write_text(
-        "\n".join(
-            [
-                json.dumps({"chunk_id": 1, "dialogue_index": 0, "role": "旁白", "dialogue": "齐夏看见余念安。", "chunk_text": "齐夏看见余念安。她问他为何而来。"}),
-                json.dumps({"chunk_id": 1, "dialogue_index": 1, "role": "齐夏", "dialogue": "我只是确认规则。", "chunk_text": "齐夏看见余念安。她问他为何而来。"}),
-                json.dumps({"chunk_id": 2, "dialogue_index": 0, "role": "其他人", "dialogue": "这里没有齐夏。"}),
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    scenes = build_scene_memories(raw, canonical_role="齐夏", aliases=["齐夏", "阿夏"], novel_title="十日终焉")
-
-    assert len(scenes) == 2
-    assert scenes[0].scene_id == "chunk_000001"
-    assert scenes[0].target_role_present is True
-    assert scenes[0].target_role_knows is True
-    assert "余念安" in scenes[0].text
-    assert scenes[1].target_role_present is False
-    assert scenes[1].target_role_knows is False
-
-
-def test_profile_roundtrip(tmp_path):
-    profile = build_default_profile("齐夏", ["齐夏", "阿夏"], "十日终焉")
-    path = tmp_path / "profile.json"
-
-    write_profile(profile, path)
-    loaded = read_profile(path)
-
-    assert loaded.role == "齐夏"
-    assert loaded.aliases == ["齐夏", "阿夏"]
-    assert "Use memory for facts." in loaded.answer_rules
+```json
+{
+  "id": "shiri_qixia_raft_000001",
+  "system": "角色协议 + 角色设定 + 记忆片段",
+  "conversations": [
+    {"from": "human", "value": "你为什么判断那条规则是陷阱？"},
+    {"from": "gpt", "value": "因为它太像答案了。真正想让人活下去的规则，不会急着替你做选择。"}
+  ],
+  "metadata": {
+    "sample_type": "motivation",
+    "oracle_scene_ids": ["scene_000032"],
+    "retrieved_scene_ids": ["scene_000032", "scene_000041"],
+    "distractor_scene_ids": ["scene_000877"],
+    "knowledge_level": "first_hand",
+    "teacher_model": "step-xxx",
+    "verified": true
+  }
+}
 ```
 
-- [ ] **Step 2: Run failing tests**
+训练时喂给模型的是 `system + conversations`；`metadata` 用于审计和评估。
 
-Run: `pytest tests/test_memory_builder.py -q`
+## 3. 文件结构目标
 
-Expected: fail because `src.memory` does not exist.
+新增或重写：
 
-- [ ] **Step 3: Implement `src/memory.py`**
+- `src/scene_memory.py`：从小说原文和原始对话构建完整场景记忆。
+- `src/profile_builder.py`：用强模型生成/更新角色设定卡。
+- `src/retrieval_hybrid.py`：BM25、语义向量、重排模型、候选合并、边界过滤。
+- `src/teacher_client.py`：StepFun/OpenAI 兼容 API 封装，支持批处理、重试、断点。
+- `src/raft_generation.py`：问题生成、记忆包构造、回答生成、样本落盘。
+- `src/raft_verifier.py`：LLM 审核与规则审核。
+- `src/runtime_agent.py`：运行时检索 + 提示词组装，不依赖 Gradio。
+- `tests/test_scene_memory.py`
+- `tests/test_hybrid_retrieval.py`
+- `tests/test_raft_generation_schema.py`
+- `tests/test_raft_verifier.py`
+- `tests/test_runtime_agent_prompt.py`
 
-Implement:
+保留但可重写内部语义：
 
-```python
-@dataclass
-class CharacterProfile: ...
+- `build_memory`：应从“原始对话聚合”升级为“小说原文 + 原始对话 -> 完整场景记忆”。
+- `build_sft`：应从“原始对话 -> ShareGPT”升级为“场景记忆 + 教师样本 -> 风格/RAFT/混合数据集”。
+- `infer`：应使用运行时智能体构造提示词，而不是在 Gradio 函数里拼字符串。
 
-@dataclass
-class SceneMemory: ...
+## 4. 数据产物
 
-def build_default_profile(role: str, aliases: list[str], novel_title: str) -> CharacterProfile: ...
-def read_dialogue_jsonl(path: Path) -> list[dict]: ...
-def build_scene_memories(raw_jsonl: Path, canonical_role: str, aliases: list[str], novel_title: str) -> list[SceneMemory]: ...
-def write_scene_memories(scenes: list[SceneMemory], path: Path) -> None: ...
-def read_scene_memories(path: Path) -> list[SceneMemory]: ...
-def write_profile(profile: CharacterProfile, path: Path) -> None: ...
-def read_profile(path: Path) -> CharacterProfile: ...
+目标产物：
+
+```text
+data/profiles/shiri_qixia_profile.json
+data/memory/shiri_qixia_scenes.jsonl
+data/memory/shiri_qixia_bm25.json
+data/memory/shiri_qixia_embeddings.npy
+data/memory/shiri_qixia_embedding_meta.jsonl
+data/memory/shiri_qixia_retrieval_eval.jsonl
+data/raft/shiri_qixia_questions.jsonl
+data/raft/shiri_qixia_answers.raw.jsonl
+data/raft/shiri_qixia_verified.jsonl
+data/shiri_qixia_chat_train.json
+data/shiri_qixia_chat_valid.json
+data/shiri_qixia_raft_train.json
+data/shiri_qixia_raft_valid.json
 ```
 
-Initial heuristic:
+大文件和版权敏感数据默认不提交 Git。
 
-- group raw dialogue rows by `chunk_id`
-- scene text is `chunk_text` if present, otherwise joined dialogues
-- `target_role_present` is true if any row role or text contains any alias
-- `target_role_knows` equals `target_role_present` in v1
-- summary can be a short deterministic string from the first 120 chars
+## 5. 配置目标
 
-- [ ] **Step 4: Run tests**
+新增配置项：
 
-Run: `pytest tests/test_memory_builder.py -q`
+```toml
+# 记忆来源
+memory_source = "full_scene"  # full_scene / dialogue_only
+scene_max_chars = 1800
+scene_overlap_chars = 250
+scene_min_dialogues = 0
 
-Expected: pass.
+# 语义向量 / 重排
+retrieval_mode = "hybrid"  # bm25 / embedding / hybrid
+embedding_model = "BAAI/bge-m3"
+reranker_model = "BAAI/bge-reranker-v2-m3"
+use_reranker = true
+bm25_top_k = 20
+embedding_top_k = 20
+rerank_top_k = 5
 
-## Task 3: BM25 Retrieval
+# 教师模型生成
+teacher_backend = "stepfun"
+teacher_model = "step-3.7-flash"
+teacher_batch_size = 5
+teacher_concurrency = 6
+generation_checkpoint_dir = "cache/raft_generation"
 
-**Files:**
-- Create: `src/retrieval.py`
-- Test: `tests/test_retrieval.py`
-
-- [ ] **Step 1: Write retrieval tests**
-
-```python
-from src.memory import SceneMemory
-from src.retrieval import BM25MemoryIndex
-
-
-def scene(scene_id, text, knows=True):
-    return SceneMemory(
-        scene_id=scene_id,
-        chunk_id=1,
-        chapter="",
-        text=text,
-        summary=text,
-        characters=[],
-        target_role_present=knows,
-        target_role_knows=knows,
-        events=[],
-        relations=[],
-        quotes=[],
-        source={},
-    )
-
-
-def test_bm25_retrieves_relevant_scene():
-    index = BM25MemoryIndex.from_scenes(
-        [
-            scene("a", "齐夏和余念安讨论规则。"),
-            scene("b", "孙悟空大闹天宫。"),
-        ]
-    )
-
-    results = index.search("余念安是谁", top_k=1)
-
-    assert results[0].scene.scene_id == "a"
-
-
-def test_retrieval_can_exclude_unknown_scenes():
-    index = BM25MemoryIndex.from_scenes(
-        [
-            scene("known", "齐夏知道余念安的线索。", knows=True),
-            scene("unknown", "旁白透露余念安的秘密。", knows=False),
-        ]
-    )
-
-    results = index.search("余念安秘密", top_k=2, exclude_narrator_only=True)
-
-    assert [r.scene.scene_id for r in results] == ["known"]
+# 数据集混合比例
+style_ratio = 0.25
+grounded_ratio = 0.35
+relationship_ratio = 0.20
+multi_turn_ratio = 0.10
+false_premise_ratio = 0.05
+boundary_ratio = 0.05
+target_train_samples = 3000
 ```
 
-- [ ] **Step 2: Run failing tests**
+## 6. 任务 1：完整场景记忆构建
 
-Run: `pytest tests/test_retrieval.py -q`
+**目标：** 让记忆的知识主体来自原始小说，而不是只来自抽取台词。
 
-Expected: fail because `src.retrieval` does not exist.
+**输入：**
 
-- [ ] **Step 3: Implement retrieval**
+- `novels/《十日终焉》（校对全本）.txt`
+- `data/raw/shiri_qixia_dialogues.jsonl`
 
-Implement a small BM25 index using stdlib only:
+**输出：**
 
-- tokenize Chinese by character bigrams plus ASCII words
-- compute IDF
-- score scenes
-- support `exclude_narrator_only`
-- save/load JSON index if needed
+- `data/memory/shiri_qixia_scenes.jsonl`
 
-- [ ] **Step 4: Run tests**
+**场景结构：**
 
-Run: `pytest tests/test_retrieval.py -q`
-
-Expected: pass.
-
-## Task 4: Shared Prompt Builder
-
-**Files:**
-- Create: `src/prompting.py`
-- Test: `tests/test_prompting.py`
-
-- [ ] **Step 1: Write prompt tests**
-
-```python
-from src.memory import CharacterProfile, SceneMemory
-from src.prompting import build_roleplay_system_prompt
-
-
-def test_prompt_contains_profile_and_memory_rules():
-    profile = CharacterProfile(
-        role="齐夏",
-        aliases=["齐夏"],
-        novel_title="十日终焉",
-        identity="终焉之地中的参与者。",
-        core_goals=[],
-        personality=["冷静"],
-        speech_style=["克制"],
-        relationships=[],
-        knowledge_boundary="只回答自己知道的事。",
-        answer_rules=["Use memory for facts."],
-    )
-    scene = SceneMemory(
-        scene_id="s1",
-        chunk_id=1,
-        chapter="",
-        text="齐夏确认了规则。",
-        summary="齐夏确认规则。",
-        characters=["齐夏"],
-        target_role_present=True,
-        target_role_knows=True,
-        events=[],
-        relations=[],
-        quotes=["我只是确认规则。"],
-        source={},
-    )
-
-    prompt = build_roleplay_system_prompt(profile, [scene])
-
-    assert "你正在扮演《十日终焉》中的齐夏" in prompt
-    assert "如果记忆片段包含答案" in prompt
-    assert "齐夏确认规则" in prompt
-    assert "不要续写 user/assistant" in prompt
+```json
+{
+  "scene_id": "scene_000032",
+  "source_start": 123456,
+  "source_end": 125100,
+  "raw_text": "小说原文片段，包括旁白、动作、心理、台词",
+  "dialogues": [
+    {"role": "乔家劲", "dialogue": "喂，骗子，快过来啊！"},
+    {"role": "齐夏", "dialogue": "我不可能死在这里的..."}
+  ],
+  "summary": "",
+  "characters": ["齐夏", "乔家劲"],
+  "target_role_present": true,
+  "target_role_knows": true,
+  "knowledge_level": "first_hand",
+  "events": [],
+  "relations": [],
+  "quotes": ["我不可能死在这里的，我有不得不出去的理由。"]
+}
 ```
 
-- [ ] **Step 2: Run failing test**
+**实现策略：**
 
-Run: `pytest tests/test_prompting.py -q`
+1. 先按原文长度切场景，使用重叠窗口保留上下文。
+2. 用原始对话的 `chunk_id/dialogue/role` 辅助对齐到场景。
+3. 对齐失败时保留原始场景，但标记 `dialogue_alignment = "missing"`。
+4. 初始 `target_role_knows` 规则：
+   - 齐夏在场景中出现或说话：`first_hand`
+   - 场景由其他人对齐夏讲述：`heard_or_inferred`
+   - 只有旁白或远处事件：`narrator_only`
 
-Expected: fail because `src.prompting` does not exist.
+**测试：**
 
-- [ ] **Step 3: Implement prompt builder**
+- 构造小小说文本，包含旁白 + 台词。
+- 构造原始对话。
+- 验证场景的 `raw_text` 包含旁白，`dialogues` 包含台词，`target_role_present` 正确。
 
-Implement:
+## 7. 任务 2：大模型场景增强
 
-```python
-def build_roleplay_system_prompt(profile: CharacterProfile, scenes: Sequence[SceneMemory], max_memory_chars: int = 1800, max_one_scene_chars: int = 600) -> str:
-    ...
+**目标：** 用强模型给场景补摘要、事件、人物关系、认知边界。
+
+**输入：**
+
+- `shiri_qixia_scenes.jsonl`
+
+**输出：**
+
+- 同结构的增强后场景数据。
+
+**教师模型提示词要求：**
+
+```text
+你是小说角色记忆标注器。
+给定一段小说原文和目标角色“齐夏”。
+请抽取：
+1. 这一段发生了什么
+2. 出现了哪些角色
+3. 齐夏是否在场
+4. 齐夏是否应该知道这段信息
+5. 事件列表
+6. 人物关系变化
+7. 齐夏原话
+
+只输出 JSON。
+不要补充原文没有的信息。
 ```
 
-Use the exact memory protocol from the architecture spec.
+**实现要求：**
 
-- [ ] **Step 4: Run test**
+- 支持批处理。
+- 支持断点续跑。
+- 每个场景失败单独记录，不阻断整体。
+- 保存原始教师模型响应，便于排查。
 
-Run: `pytest tests/test_prompting.py -q`
+**测试：**
 
-Expected: pass.
+- 用假的教师模型返回固定 JSON。
+- 验证场景增强结果能合并回场景。
+- 验证失败样本进入 `failed.jsonl`。
 
-## Task 5: RAFT SFT Builder
+## 8. 任务 3：角色设定卡生成
 
-**Files:**
-- Create: `src/build_raft_sft.py`
-- Test: `tests/test_build_raft_sft.py`
+**目标：** 生成齐夏角色设定卡，但允许人工编辑。
 
-- [ ] **Step 1: Write RAFT SFT test**
+**输入：**
 
-```python
-import json
+- 高频齐夏场景
+- 关系/动机相关场景
+- 重要原话
 
-from src.build_raft_sft import build_raft_sharegpt
-from src.memory import CharacterProfile, SceneMemory
+**输出：**
 
+- `data/profiles/shiri_qixia_profile.json`
 
-def test_build_raft_sharegpt_outputs_system_human_gpt():
-    profile = CharacterProfile(
-        role="齐夏",
-        aliases=["齐夏"],
-        novel_title="十日终焉",
-        identity="",
-        core_goals=[],
-        personality=[],
-        speech_style=[],
-        relationships=[],
-        knowledge_boundary="",
-        answer_rules=[],
-    )
-    scenes = [
-        SceneMemory(
-            scene_id="chunk_000001",
-            chunk_id=1,
-            chapter="",
-            text="余念安询问齐夏。",
-            summary="余念安询问齐夏。",
-            characters=["齐夏", "余念安"],
-            target_role_present=True,
-            target_role_knows=True,
-            events=[],
-            relations=[],
-            quotes=[],
-            source={},
-        )
-    ]
-    raw_rows = [
-        {"chunk_id": 1, "dialogue_index": 0, "role": "余念安", "dialogue": "你为什么来？"},
-        {"chunk_id": 1, "dialogue_index": 1, "role": "齐夏", "dialogue": "我只是确认规则。"},
-    ]
+**角色设定卡结构：**
 
-    samples = build_raft_sharegpt(raw_rows, scenes, profile, target_roles={"齐夏"}, max_memory_chars=1000)
-
-    assert samples[0]["conversations"][0]["from"] == "system"
-    assert samples[0]["conversations"][1] == {"from": "human", "value": "余念安：你为什么来？"}
-    assert samples[0]["conversations"][2] == {"from": "gpt", "value": "我只是确认规则。"}
-    assert samples[0]["metadata"]["oracle_scene_ids"] == ["chunk_000001"]
+```json
+{
+  "role": "齐夏",
+  "aliases": ["齐夏", "老齐", "齐哥", "小齐"],
+  "identity": "",
+  "core_goals": [],
+  "personality": [],
+  "speech_style": [],
+  "relationships": [],
+  "knowledge_boundary": "",
+  "answer_rules": []
+}
 ```
 
-- [ ] **Step 2: Run failing test**
+**注意：**
 
-Run: `pytest tests/test_build_raft_sft.py -q`
+- 自动生成不等于最终真理。
+- 生成后必须保留为可编辑 JSON。
+- 后续 `build_sft` 和 `infer` 只读取角色设定卡文件，不硬编码。
 
-Expected: fail because builder does not exist.
+## 9. 任务 4：混合检索
 
-- [ ] **Step 3: Implement builder**
+**目标：** 检索不是只靠 BM25，也不是只靠语义向量，而是精确召回 + 语义召回 + 重排。
 
-Implement:
+**召回层：**
 
-```python
-def build_raft_sharegpt(raw_rows: list[dict], scenes: list[SceneMemory], profile: CharacterProfile, target_roles: set[str], max_memory_chars: int) -> list[dict]:
-    ...
+```text
+BM25 top 20：人名、别名、专有名词、原话、规则名
+语义向量 top 20：动机、情绪、因果、语义相似
 ```
 
-V1 behavior:
+**合并层：**
 
-- group rows by `chunk_id`
-- skip chunks with no target role response
-- create one sample per target response block
-- leading non-target rows become human context
-- target rows become gpt response
-- system prompt uses the chunk's oracle scene
+```text
+合并 BM25 和语义向量候选
+按 scene_id 去重
+保留来源分数
+```
 
-- [ ] **Step 4: Run test**
+**过滤层：**
 
-Run: `pytest tests/test_build_raft_sft.py -q`
+```text
+默认排除 narrator_only
+优先 first_hand
+允许 heard_or_inferred
+```
 
-Expected: pass.
+**排序层：**
 
-## Task 6: CLI Integration and Smoke Commands
+```text
+重排模型(question, scene.raw_text + summary + quotes)
+输出 top 3-5
+```
 
-**Files:**
-- Modify: `main.py`
-- Modify: `src/build_sft.py`
-- Modify or create: `src/build_memory.py`
-- Test: `tests/test_cli_memory_steps.py`
+**测试：**
 
-- [ ] **Step 1: Add minimal CLI smoke test**
+- 精确名字问题应由 BM25 召回。
+- 语义动机问题应由语义向量召回。
+- 只有旁白信息的场景默认被过滤。
+- 重排模型的模拟分数能决定最终顺序。
 
-Test should run a tiny fake config through `build_memory` and `build_sft` functions directly, not full subprocess training.
+## 10. 任务 5：问题生成
 
-- [ ] **Step 2: Implement `build_memory` step**
+**目标：** 不只生成“这段发生了什么”，要覆盖角色用户真实会问的问题。
 
-The step should:
+**每个场景或场景簇生成问题类型：**
 
-- read `cfg.raw_jsonl`
-- create default profile if missing
-- create `cfg.scene_memory_jsonl`
-- create `cfg.memory_index_json`
-- write status marker
+```text
+grounded_fact
+relationship
+motivation
+false_premise
+no_evidence
+multi_turn_followup
+casual_roleplay
+```
 
-- [ ] **Step 3: Implement memory-aware build_sft**
+**输出：**
 
-When `cfg.sft_mode` is `raft` or `mixed`, write `cfg.raft_train_json` and `cfg.raft_valid_json`.
+```json
+{
+  "question_id": "q_000001",
+  "sample_type": "motivation",
+  "question": "你当时为什么判断那条规则是陷阱？",
+  "oracle_scene_ids": ["scene_000032"],
+  "requires_memory": true,
+  "knowledge_level": "first_hand"
+}
+```
 
-- [ ] **Step 4: Run tests**
+**生成策略：**
 
-Run: `pytest tests/test_config_memory.py tests/test_memory_builder.py tests/test_retrieval.py tests/test_prompting.py tests/test_build_raft_sft.py tests/test_cli_memory_steps.py -q`
+- 每个重要场景生成 2-5 个问题。
+- 关系/动机问题可以基于场景簇，而不是单个场景。
+- 错误前提问题要故意包含错误前提。
+- 无证据问题要确保标准证据场景为空或无关。
 
-Expected: all pass.
+## 11. 任务 6：记忆包构造
 
-## Task 7: Qixia Local Data Smoke
+**目标：** 训练时的记忆包必须模拟运行时检索结果。
 
-**Files:**
-- No required code files if previous tasks are complete.
+每个问题构造：
 
-- [ ] **Step 1: Find existing Qixia raw dialogues**
+```text
+标准证据场景：真正能回答问题
+相关场景：补充背景
+干扰场景：看似相关但不能回答
+```
 
-Run:
+规则：
+
+- 有证据样本至少 1 个标准证据场景。
+- 人物关系/动机样本可有 2-4 个相关场景。
+- 无证据样本不能包含能直接回答问题的证据。
+- 干扰场景不要太离谱，要“看似相关”。
+
+## 12. 任务 7：教师模型回答生成
+
+**目标：** 用强模型生成齐夏口吻回答，但严格基于记忆包。
+
+**教师模型提示词必须包含：**
+
+```text
+你是训练数据生成器。
+目标角色：齐夏。
+你只能使用给定记忆片段中的事实。
+回答必须像齐夏本人。
+不要逐字复述原文。
+不要添加记忆外具体事实。
+资料不足时，用齐夏口吻说明无法确认。
+只输出 assistant 的回答文本。
+```
+
+**输出要求：**
+
+- 不出现“根据资料/根据片段/作为AI”。
+- 不续写 user/assistant。
+- 不直接复制大段原文。
+- 可以复用少量经典原话，但必须自然。
+
+## 13. 任务 8：审核器审核
+
+**目标：** API 不怕花，就用审核器保质量，少要垃圾数据。
+
+审核维度：
+
+```text
+grounded：回答是否被记忆支撑
+in_character：是否像齐夏
+no_hallucination：是否编造了具体事实
+boundary_ok：是否使用了角色不该知道的信息
+not_copying：是否过度复述原文
+format_ok：是否没有续写 user/assistant
+```
+
+审核器输出：
+
+```json
+{
+  "accepted": true,
+  "scores": {
+    "grounded": 5,
+    "in_character": 4,
+    "no_hallucination": 5,
+    "boundary_ok": 5,
+    "not_copying": 4,
+    "format_ok": 5
+  },
+  "reason": ""
+}
+```
+
+过滤规则：
+
+- 任一关键项低于 4 分，丢弃或重写。
+- `no_hallucination < 5` 的样本优先重写。
+- `boundary_ok < 5` 的样本不得进入训练。
+
+## 14. 任务 9：最终 ShareGPT 数据构造
+
+**目标：** 训练格式和运行时格式一致。
+
+统一系统提示词：
+
+```text
+你正在扮演《十日终焉》中的齐夏。
+
+你必须遵守：
+1. 如果记忆片段包含答案，优先依据记忆回答。
+2. 不要逐字复述记忆片段，要用齐夏自己的口吻回答。
+3. 如果记忆片段没有答案，不要编造具体小说事实。
+4. 始终保持第一人称。
+5. 不要续写 user/assistant。
+
+【角色设定】
+...
+
+【记忆片段】
+...
+```
+
+最终输出：
+
+```text
+data/shiri_qixia_chat_train.json      # mixed 主训练集
+data/shiri_qixia_chat_valid.json
+data/shiri_qixia_raft_train.json      # 纯 RAFT 备查/对照
+data/shiri_qixia_raft_valid.json
+```
+
+## 15. 任务 10：运行时智能体对齐
+
+**目标：** 推理时用同一套协议，不要训练和推理两张皮。
+
+实现：
+
+- `runtime_agent.build_prompt(user_message, history)`
+- 使用混合检索器。
+- 使用同一 `build_roleplay_system_prompt`。
+- 不把记忆混进普通用户消息。
+- 对话历史和检索到的记忆分开。
+
+测试：
+
+- 给定问题“余念安是谁”，提示词中应出现相关记忆。
+- 给定无关问题，提示词可出现“没有可靠记忆片段”。
+- 不加载模型也能测试提示词。
+
+## 16. 任务 11：齐夏数据生成冒烟验证
+
+**目标：** 本地不训练，只验证数据生成链路。
+
+已有输入：
+
+```text
+novels/《十日终焉》（校对全本）.txt
+data/raw/shiri_qixia_dialogues.jsonl
+```
+
+命令：
 
 ```bash
-find /Users/zdl/project/taletalk/taletalk-repo/data -iname '*qixia*' -o -iname '*shiri*'
+python3 main.py -c configs/shiri_qixia.toml -r build_memory build_sft -o build_memory build_sft
 ```
 
-Expected: identify existing raw dialogue JSONL or confirm missing.
-
-- [ ] **Step 2: If raw dialogue exists, run memory build**
-
-Run:
+如果要重新用 StepFun 抽取：
 
 ```bash
-python main.py -c configs/shiri_qixia.toml -o build_memory build_sft
+set -a
+source .env.stepfun
+set +a
+
+# config 中必须设置 extraction_backend = "cloud_api"
+python3 main.py -c configs/shiri_qixia.toml -r extract build_memory build_sft -o extract build_memory build_sft
 ```
 
-Expected: profile, scenes, memory index, and RAFT/mixed dataset are generated. No training runs.
-
-- [ ] **Step 3: If raw dialogue is missing, run extraction with StepFun**
-
-Before running, confirm `.env.stepfun` exists and contains API config:
+验证：
 
 ```bash
-ls -l .env.stepfun
+python3 -m pytest -q
+python3 scripts/validate_dataset.py data/shiri_qixia_chat_train.json
+python3 scripts/validate_dataset.py data/shiri_qixia_raft_train.json
 ```
 
-Then run only extract/build_memory/build_sft:
+不运行：
 
-```bash
-set -a && source .env.stepfun && set +a
-python main.py -c configs/shiri_qixia.toml -o extract build_memory build_sft
+```text
+train
+infer with loaded model
+ROCm training
 ```
 
-Expected: extraction uses cloud API, then memory and SFT artifacts are generated. No training runs.
+## 17. 阶段验收标准
 
-- [ ] **Step 4: Validate generated datasets**
+第一阶段完成标准：
 
-Run:
+- 场景记忆来自原始小说文本，不只是台词。
+- 每条场景能看到 `raw_text`、`dialogues`、`characters`、`quotes`、`knowledge_level`。
+- 至少生成 100 条教师模型回答 + 审核通过样本作为冒烟验证。
+- 训练数据系统提示词和运行时提示词使用同一个构造函数。
+- 本地测试通过。
+- 不运行训练。
 
-```bash
-python scripts/validate_dataset.py data/shiri_qixia_raft_train.json
-```
+第二阶段完成标准：
 
-Expected: validation passes or reports only known unsupported `metadata` sidecar issue.
+- 生成 1000-3000 条高质量齐夏训练样本。
+- 审核器通过率和拒绝原因有统计。
+- 有固定评测集，覆盖事实、关系、动机、错误前提、边界、不知道。
+- 云端可直接训练 mixed 主训练集。
 
-## Task 8: Commit and Report
+## 18. 明确不做
 
-**Files:**
-- All implementation and tests from tasks above.
+本计划当前不做：
 
-- [ ] **Step 1: Run focused tests**
+- 不把整本小说事实强行塞进 LoRA。
+- 不只基于原始对话生成最终记忆。
+- 不用单纯 BM25 作为最终检索。
+- 不在本地跑 ROCm 训练。
+- 不为了兼容旧实现保留错误的数据边界。
 
-Run:
+## 19. 自检
 
-```bash
-pytest tests/test_config_memory.py tests/test_memory_builder.py tests/test_retrieval.py tests/test_prompting.py tests/test_build_raft_sft.py tests/test_cli_memory_steps.py -q
-```
-
-Expected: pass.
-
-- [ ] **Step 2: Run no-training smoke**
-
-Run either the existing-data or StepFun path from Task 7.
-
-Expected: no training starts; artifacts are generated.
-
-- [ ] **Step 3: Commit scoped changes**
-
-Run:
-
-```bash
-git add docs/superpowers/plans/2026-06-29-memory-raft-qixia.md src tests config.example.toml main.py
-git commit -m "feat: add memory-first RAFT data pipeline"
-```
-
-Do not stage unrelated user changes unless they are directly required by this feature.
-
-## Self-Review
-
-- Spec coverage: Phase 1 runtime memory and Phase 2 RAFT SFT generation are covered. Phase 3 cognitive boundary is represented by `target_role_knows` heuristics, not full LLM classification. Phase 4 richer retrieval is intentionally excluded.
-- Placeholder scan: no TBD/TODO placeholders are used.
-- Scope check: this plan intentionally does not run ROCm training. It produces testable software and data artifacts that can be trained later on cloud hardware.
+- 架构已从台词记忆 v1 修正为完整场景记忆。
+- 数据生成已从“规则拼接”修正为教师模型生成 + 审核器过滤。
+- 检索已从只用 BM25 修正为 BM25 + 语义向量 + 重排模型 + 认知边界过滤。
+- 训练目标已明确：LoRA 学口吻和记忆使用协议，事实留在记忆库。
+- 计划全文使用中文。
