@@ -35,6 +35,12 @@ class SceneMemory:
     relations: list[dict[str, Any]]
     quotes: list[str]
     source: dict[str, Any]
+    raw_text: str = ""
+    coverage: str = "full"
+    knowledge_level: str = "first_hand"
+    source_start: int = 0
+    source_end: int = 0
+    source_risks: list[str] | None = None
 
 
 def build_default_profile(role: str, aliases: list[str], novel_title: str) -> CharacterProfile:
@@ -135,7 +141,12 @@ def read_scene_memories(path: Path) -> list[SceneMemory]:
     with path.open("r", encoding="utf-8") as f:
         for line in f:
             if line.strip():
-                scenes.append(SceneMemory(**json.loads(line)))
+                row = json.loads(line)
+                if "raw_text" not in row:
+                    row["raw_text"] = row.get("text", "")
+                if "knowledge_level" not in row:
+                    row["knowledge_level"] = "first_hand" if row.get("target_role_knows", True) else "narrator_only"
+                scenes.append(SceneMemory(**row))
     return scenes
 
 

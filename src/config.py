@@ -43,8 +43,25 @@ class Config:
 
     # 记忆 / RAFT配置
     enable_memory: bool
+    generation_mode: str
+    ai_passes: int
+    ai_audit_mode: str
+    scene_max_chars: int
+    scene_overlap_chars: int
+    teacher_backend: str
+    teacher_model: str
+    teacher_batch_size: int
+    teacher_concurrency: int
+    generation_checkpoint_dir: Path
     memory_backend: str
+    retrieval_mode: str
+    embedding_model: str
+    reranker_model: str
+    use_reranker: bool
     top_k_memory: int
+    bm25_top_k: int
+    embedding_top_k: int
+    rerank_top_k: int
     max_memory_chars: int
     max_one_scene_chars: int
     prefer_target_present: bool
@@ -55,6 +72,9 @@ class Config:
     raft_include_distractors: bool
     raft_no_answer_ratio: float
     roleplay_mode: str
+    target_train_samples: int
+    eval_question_count: int
+    export_mode: str
     
     # 训练配置
     per_device_train_batch_size: int
@@ -93,6 +113,18 @@ class Config:
     profile_json: Path
     scene_memory_jsonl: Path
     memory_index_json: Path
+    embedding_npy: Path
+    embedding_meta_jsonl: Path
+    raw_scene_jsonl: Path
+    scene_build_report_json: Path
+    profile_observations_jsonl: Path
+    raft_candidates_raw_jsonl: Path
+    raft_failed_jsonl: Path
+    raft_memory_packs_jsonl: Path
+    eval_questions_jsonl: Path
+    eval_report_json: Path
+    eval_report_md: Path
+    role_package_dir: Path
     raft_train_json: Path
     raft_valid_json: Path
 
@@ -126,12 +158,28 @@ def load_config(config_path: str = "config.toml") -> Config:
     cache_dir = repo_dir / "cache"
     logs_dir = repo_dir / "logs"
     status_dir = repo_dir / "status"
+    raft_dir = repo_dir / "data" / "raft"
+    eval_dir = repo_dir / "data" / "eval"
+    reports_dir = repo_dir / cfg.get("eval_report_dir", "reports")
+    role_package_root = repo_dir / cfg.get("role_package_dir", "dist/roles")
     adapter_dir_raw = cfg.get("adapter_dir", "").strip()
     adapter_dir = Path(adapter_dir_raw) if adapter_dir_raw else None
     if adapter_dir and not adapter_dir.is_absolute():
         adapter_dir = (repo_dir / adapter_dir).resolve()
 
-    for d in [raw_dir, sft_dir, profiles_dir, memory_dir, cache_dir, logs_dir, status_dir]:
+    for d in [
+        raw_dir,
+        sft_dir,
+        profiles_dir,
+        memory_dir,
+        raft_dir,
+        eval_dir,
+        reports_dir,
+        role_package_root,
+        cache_dir,
+        logs_dir,
+        status_dir,
+    ]:
         d.mkdir(parents=True, exist_ok=True)
     
     run_name = cfg["run_name"]
@@ -141,8 +189,26 @@ def load_config(config_path: str = "config.toml") -> Config:
     profile_json = profiles_dir / f"{run_name}_profile.json"
     scene_memory_jsonl = memory_dir / f"{run_name}_scenes.jsonl"
     memory_index_json = memory_dir / f"{run_name}_bm25.json"
+    embedding_npy = memory_dir / f"{run_name}_embeddings.npy"
+    embedding_meta_jsonl = memory_dir / f"{run_name}_embedding_meta.jsonl"
+    raw_scene_jsonl = memory_dir / f"{run_name}_scenes.raw.jsonl"
+    scene_build_report_json = memory_dir / f"{run_name}_scene_build_report.json"
+    profile_observations_jsonl = profiles_dir / f"{run_name}_profile.observations.jsonl"
+    raft_candidates_raw_jsonl = raft_dir / f"{run_name}_candidates.raw.jsonl"
+    generation_checkpoint_dir = repo_dir / cfg.get("generation_checkpoint_dir", "cache/raft_generation")
+    raft_failed_jsonl = generation_checkpoint_dir / "failed.jsonl"
+    raft_memory_packs_jsonl = raft_dir / f"{run_name}_memory_packs.jsonl"
+    eval_questions_jsonl = eval_dir / f"{run_name}_eval_questions.jsonl"
+    eval_report_json = reports_dir / f"{run_name}_eval_report.json"
+    eval_report_md = reports_dir / f"{run_name}_eval_report.md"
+    role_package_dir = role_package_root / run_name
     raft_train_json = sft_dir / f"{run_name}_raft_train.json"
     raft_valid_json = sft_dir / f"{run_name}_raft_valid.json"
+    generation_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    ai_passes = int(cfg.get("ai_passes", 1))
+    if ai_passes > 2:
+        raise ValueError("ai_passes 最大只能是 2；默认阶段一只允许 1 轮 AI")
     
     return Config(
         # 基础输入
@@ -178,8 +244,25 @@ def load_config(config_path: str = "config.toml") -> Config:
 
         # 记忆 / RAFT
         enable_memory=cfg.get("enable_memory", False),
+        generation_mode=cfg.get("generation_mode", "one_pass"),
+        ai_passes=ai_passes,
+        ai_audit_mode=cfg.get("ai_audit_mode", "rules"),
+        scene_max_chars=cfg.get("scene_max_chars", 1800),
+        scene_overlap_chars=cfg.get("scene_overlap_chars", 250),
+        teacher_backend=cfg.get("teacher_backend", cfg.get("llm_platform", "custom")),
+        teacher_model=cfg.get("teacher_model", cfg.get("custom_model_name", "")),
+        teacher_batch_size=cfg.get("teacher_batch_size", 5),
+        teacher_concurrency=cfg.get("teacher_concurrency", cfg.get("max_workers", 1)),
+        generation_checkpoint_dir=generation_checkpoint_dir,
         memory_backend=cfg.get("memory_backend", "bm25"),
+        retrieval_mode=cfg.get("retrieval_mode", cfg.get("memory_backend", "bm25")),
+        embedding_model=cfg.get("embedding_model", "BAAI/bge-m3"),
+        reranker_model=cfg.get("reranker_model", "BAAI/bge-reranker-v2-m3"),
+        use_reranker=cfg.get("use_reranker", False),
         top_k_memory=cfg.get("top_k_memory", 3),
+        bm25_top_k=cfg.get("bm25_top_k", 20),
+        embedding_top_k=cfg.get("embedding_top_k", 20),
+        rerank_top_k=cfg.get("rerank_top_k", 5),
         max_memory_chars=cfg.get("max_memory_chars", 1800),
         max_one_scene_chars=cfg.get("max_one_scene_chars", 600),
         prefer_target_present=cfg.get("prefer_target_present", True),
@@ -190,6 +273,9 @@ def load_config(config_path: str = "config.toml") -> Config:
         raft_include_distractors=cfg.get("raft_include_distractors", True),
         raft_no_answer_ratio=cfg.get("raft_no_answer_ratio", 0.1),
         roleplay_mode=cfg.get("roleplay_mode", "in_character"),
+        target_train_samples=cfg.get("target_train_samples", 3000),
+        eval_question_count=cfg.get("eval_question_count", 120),
+        export_mode=cfg.get("export_mode", "private_full"),
         
         # 训练
         per_device_train_batch_size=cfg["per_device_train_batch_size"],
@@ -228,6 +314,18 @@ def load_config(config_path: str = "config.toml") -> Config:
         profile_json=profile_json,
         scene_memory_jsonl=scene_memory_jsonl,
         memory_index_json=memory_index_json,
+        embedding_npy=embedding_npy,
+        embedding_meta_jsonl=embedding_meta_jsonl,
+        raw_scene_jsonl=raw_scene_jsonl,
+        scene_build_report_json=scene_build_report_json,
+        profile_observations_jsonl=profile_observations_jsonl,
+        raft_candidates_raw_jsonl=raft_candidates_raw_jsonl,
+        raft_failed_jsonl=raft_failed_jsonl,
+        raft_memory_packs_jsonl=raft_memory_packs_jsonl,
+        eval_questions_jsonl=eval_questions_jsonl,
+        eval_report_json=eval_report_json,
+        eval_report_md=eval_report_md,
+        role_package_dir=role_package_dir,
         raft_train_json=raft_train_json,
         raft_valid_json=raft_valid_json,
     )

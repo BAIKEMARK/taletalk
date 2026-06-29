@@ -17,6 +17,12 @@ def load_step_fn(step_name: str):
     if step_name == "build_sft":
         from src.build_sft import run_build_sft
         return run_build_sft
+    if step_name == "eval":
+        from src.eval_export import run_eval
+        return run_eval
+    if step_name == "export_role":
+        from src.eval_export import run_export_role
+        return run_export_role
     if step_name == "train":
         from src.train import run_train
         return run_train
@@ -28,7 +34,7 @@ def load_step_fn(step_name: str):
 def main():
     parser = argparse.ArgumentParser(description="TaleTalk - 让小说角色活起来")
     parser.add_argument("--config", "-c", default="config.toml", help="配置文件路径，默认config.toml")
-    step_choices = ["extract", "build_memory", "build_sft", "train", "infer"]
+    step_choices = ["extract", "build_memory", "build_sft", "eval", "export_role", "train", "infer"]
     parser.add_argument("--rerun", "-r", nargs="+", choices=step_choices, help="强制重跑指定步骤")
     parser.add_argument("--only", "-o", nargs="+", choices=step_choices, help="只执行指定步骤，不执行后续步骤")
     args = parser.parse_args()
@@ -57,13 +63,18 @@ def main():
         ("extract", "抽取对话"),
         ("build_memory", "构建角色记忆"),
         ("build_sft", "构建SFT数据集"),
+        ("eval", "生成评测报告"),
+        ("export_role", "导出角色包"),
         ("train", "训练LoRA"),
         ("infer", "启动推理服务"),
     ]
     only_steps = set(args.only or [])
+    default_steps = {"build_memory", "build_sft", "eval", "export_role"}
     
     for step_name, step_desc in steps:
         if only_steps and step_name not in only_steps:
+            continue
+        if not only_steps and step_name not in default_steps:
             continue
         
         try:
@@ -81,8 +92,9 @@ def main():
         sys.exit(0)
     
     main_logger.info("===== 所有步骤执行完成 =====")
-    main_logger.info(f"LoRA模型输出路径: {config.output_dir}/{config.run_name}")
     main_logger.info(f"训练数据集: {config.train_json}")
+    main_logger.info(f"评测报告: {config.eval_report_md}")
+    main_logger.info(f"角色包: {config.role_package_dir}")
 
 if __name__ == "__main__":
     main()

@@ -32,13 +32,18 @@ wandb/
 /data/raw/
 /data/memory/
 /data/profiles/
+/data/raft/
+/data/eval/
 /data/*_raft_train.json
 /data/*_raft_valid.json
 /data/*_chat_train.json
 /data/*_chat_valid.json
+/dist/
+/reports/
 # Extraction runtime log
 dialogue_extractor.log
 
 # Local/private novel texts. Keep only the public-domain demo novel in git.
 novels/*.txt
 !novels/西游记白话文.txt
+!novels/stage1_smoke_novel.txt

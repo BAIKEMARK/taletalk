@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from collections import Counter
 from pathlib import Path
 from typing import List
 from .build_raft_sft import build_raft_sharegpt
 from .config import Config
 from .memory import read_dialogue_jsonl, read_profile, read_scene_memories
+from .memory_pack import build_memory_packs, write_memory_packs
+from .prompting import build_roleplay_system_prompt_from_memory_pack
+from .retrieval import BM25MemoryIndex
 from .utils import init_logger, check_step_done, mark_step_done, run_with_progress
 
 def _load_jsonl(path: Path) -> List[dict]:
@@ -125,6 +129,22 @@ def run_build_sft(config: Config) -> None:
     logger.info(f"训练集输出: {config.train_json}")
     logger.info(f"验证集输出: {config.valid_json}")
     logger.info(f"目标角色别名: {', '.join(config.target_role_aliases)}")
+
+    if config.enable_memory and config.raft_candidates_raw_jsonl.exists():
+        logger.info("检测到 one-pass candidate samples，使用阶段一 memory-aware SFT 路径")
+        samples = _build_phase_one_sft(config)
+        if config.max_conversations > 0 and len(samples) > config.max_conversations:
+            random.Random(config.seed).shuffle(samples)
+            samples = samples[: config.max_conversations]
+        train_samples, valid_samples = _split_samples(samples, config)
+        _write_json(config.train_json, train_samples)
+        _write_json(config.valid_json, valid_samples)
+        _write_json(config.raft_train_json, train_samples)
+        _write_json(config.raft_valid_json, valid_samples)
+        logger.info(f"阶段一 mixed SFT: 训练集 {len(train_samples)} 条，验证集 {len(valid_samples)} 条")
+        mark_step_done(step_name, config.status_dir)
+        logger.info("===== SFT数据集构建完成 =====")
+        return
     
     # 加载原始对话
     lines = _load_jsonl(config.raw_jsonl)
@@ -236,3 +256,75 @@ def run_build_sft(config: Config) -> None:
     
     mark_step_done(step_name, config.status_dir)
     logger.info("===== SFT数据集构建完成 =====")
+
+
+def _build_phase_one_sft(config: Config) -> list[dict]:
+    profile = read_profile(config.profile_json)
+    scenes = read_scene_memories(config.scene_memory_jsonl)
+    candidates = _filter_candidates(_load_jsonl(config.raft_candidates_raw_jsonl))
+    index = BM25MemoryIndex.from_scenes(scenes)
+    packs = build_memory_packs(
+        candidates,
+        scenes,
+        index,
+        max_one_scene_chars=config.max_one_scene_chars,
+        include_distractors=config.raft_include_distractors,
+    )
+    write_memory_packs(packs, config.raft_memory_packs_jsonl)
+    packs_by_question = {pack["question_id"]: pack for pack in packs}
+
+    rows: list[dict] = []
+    for candidate in candidates:
+        pack = packs_by_question.get(candidate["id"], {"items": []})
+        system = build_roleplay_system_prompt_from_memory_pack(
+            profile,
+            pack["items"],
+            max_memory_chars=config.max_memory_chars,
+        )
+        rows.append(
+            {
+                "id": candidate["id"],
+                "system": system,
+                "conversations": [
+                    {"from": "human", "value": candidate["question"]},
+                    {"from": "gpt", "value": candidate["answer"]},
+                ],
+                "metadata": {
+                    "sample_type": candidate.get("sample_type"),
+                    "source_scene_ids": candidate.get("source_scene_ids", []),
+                    "knowledge_level": candidate.get("knowledge_level"),
+                    "answer_policy": candidate.get("answer_policy"),
+                    "generation_mode": candidate.get("generation_mode", config.generation_mode),
+                },
+            }
+        )
+    return rows
+
+
+def _filter_candidates(candidates: list[dict]) -> list[dict]:
+    filtered: list[dict] = []
+    for candidate in candidates:
+        question = str(candidate.get("question", "")).strip()
+        answer = str(candidate.get("answer", "")).strip()
+        refs = candidate.get("source_scene_ids", [])
+        policy = str(candidate.get("answer_policy", "answer_from_memory"))
+        if not question or not answer:
+            continue
+        if re.search(r"\b(user|assistant)\b|用户[:：]|助手[:：]", answer, flags=re.I):
+            continue
+        if any(bad in answer for bad in ["作为AI", "作为 AI", "根据资料", "根据片段", "训练数据"]):
+            continue
+        if answer.endswith(("，", "、", "：", ":")):
+            continue
+        if policy != "insufficient_memory" and not refs:
+            continue
+        if _copying_risk(question, answer):
+            continue
+        filtered.append(candidate)
+    return filtered
+
+
+def _copying_risk(question: str, answer: str) -> bool:
+    if len(answer) < 80:
+        return False
+    return question in answer or len(set(answer)) < max(10, len(answer) // 8)
