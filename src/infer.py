@@ -7,6 +7,7 @@ from pathlib import Path
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 from .config import Config
+from .runtime_memory import build_runtime_system_prompt, load_runtime_memory
 from .utils import init_logger, check_step_done, mark_step_done
 
 def run_infer(config: Config) -> None:
@@ -34,6 +35,11 @@ def run_infer(config: Config) -> None:
     model = PeftModel.from_pretrained(base_model, lora_path)
     model.eval()
     logger.info("模型加载完成")
+    runtime_memory = load_runtime_memory(config)
+    if runtime_memory is None:
+        logger.info("未加载角色记忆，使用纯LoRA提示词")
+    else:
+        logger.info("已加载角色记忆，推理时会按用户问题检索记忆片段")
     
     # 聊天函数
     def clean_reply(text: str) -> str:
@@ -51,7 +57,7 @@ def run_infer(config: Config) -> None:
     def chat_fn(message, history, max_new_tokens, temperature):
         # 构建prompt
         messages = []
-        system_prompt = f"你正在扮演《{config.novel_title}》中的{config.canonical_role}。严格保持{config.canonical_role}的语气、性格、说话习惯和价值观，根据对话上下文自然回应，不要跳出角色，不要续写其他角色的发言。"
+        system_prompt = build_runtime_system_prompt(config, runtime_memory, message)
         messages.append({"role": "system", "content": system_prompt})
         
         for h in history:

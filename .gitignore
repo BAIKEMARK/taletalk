@@ -28,7 +28,14 @@ wandb/
 
 # Extraction runtime caches.
 /cache/
+/status/
 /data/raw/
+/data/memory/
+/data/profiles/
+/data/*_raft_train.json
+/data/*_raft_valid.json
+/data/*_chat_train.json
+/data/*_chat_valid.json
 # Extraction runtime log
 dialogue_extractor.log
 

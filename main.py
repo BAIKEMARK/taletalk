@@ -11,6 +11,9 @@ def load_step_fn(step_name: str):
     if step_name == "extract":
         from src.extract import run_extract
         return run_extract
+    if step_name == "build_memory":
+        from src.build_memory import run_build_memory
+        return run_build_memory
     if step_name == "build_sft":
         from src.build_sft import run_build_sft
         return run_build_sft
@@ -25,8 +28,9 @@ def load_step_fn(step_name: str):
 def main():
     parser = argparse.ArgumentParser(description="TaleTalk - 让小说角色活起来")
     parser.add_argument("--config", "-c", default="config.toml", help="配置文件路径，默认config.toml")
-    parser.add_argument("--rerun", "-r", nargs="+", choices=["extract", "build_sft", "train"], help="强制重跑指定步骤，可选值: extract, build_sft, train")
-    parser.add_argument("--only", "-o", choices=["extract", "build_sft", "train", "infer"], help="只执行指定步骤，不执行后续步骤")
+    step_choices = ["extract", "build_memory", "build_sft", "train", "infer"]
+    parser.add_argument("--rerun", "-r", nargs="+", choices=step_choices, help="强制重跑指定步骤")
+    parser.add_argument("--only", "-o", nargs="+", choices=step_choices, help="只执行指定步骤，不执行后续步骤")
     args = parser.parse_args()
     
     # 加载配置
@@ -51,13 +55,15 @@ def main():
     
     steps = [
         ("extract", "抽取对话"),
+        ("build_memory", "构建角色记忆"),
         ("build_sft", "构建SFT数据集"),
         ("train", "训练LoRA"),
         ("infer", "启动推理服务"),
     ]
+    only_steps = set(args.only or [])
     
     for step_name, step_desc in steps:
-        if args.only and step_name != args.only:
+        if only_steps and step_name not in only_steps:
             continue
         
         try:
@@ -70,9 +76,9 @@ def main():
             main_logger.info("查看日志文件获取详细错误信息")
             sys.exit(1)
         
-        if args.only and step_name == args.only:
-            main_logger.info("指定步骤执行完成，退出")
-            sys.exit(0)
+    if only_steps:
+        main_logger.info("指定步骤执行完成，退出")
+        sys.exit(0)
     
     main_logger.info("===== 所有步骤执行完成 =====")
     main_logger.info(f"LoRA模型输出路径: {config.output_dir}/{config.run_name}")

@@ -40,6 +40,21 @@ class Config:
     valid_ratio: float
     max_conversations: int
     seed: int
+
+    # 记忆 / RAFT配置
+    enable_memory: bool
+    memory_backend: str
+    top_k_memory: int
+    max_memory_chars: int
+    max_one_scene_chars: int
+    prefer_target_present: bool
+    exclude_narrator_only: bool
+    sft_mode: str
+    style_data_ratio: float
+    raft_data_ratio: float
+    raft_include_distractors: bool
+    raft_no_answer_ratio: float
+    roleplay_mode: str
     
     # 训练配置
     per_device_train_batch_size: int
@@ -75,6 +90,11 @@ class Config:
     raw_jsonl: Path
     train_json: Path
     valid_json: Path
+    profile_json: Path
+    scene_memory_jsonl: Path
+    memory_index_json: Path
+    raft_train_json: Path
+    raft_valid_json: Path
 
 def load_config(config_path: str = "config.toml") -> Config:
     with open(config_path, "rb") as f:
@@ -101,6 +121,8 @@ def load_config(config_path: str = "config.toml") -> Config:
     
     raw_dir = repo_dir / "data" / "raw"
     sft_dir = repo_dir / "data"
+    profiles_dir = repo_dir / "data" / "profiles"
+    memory_dir = repo_dir / "data" / "memory"
     cache_dir = repo_dir / "cache"
     logs_dir = repo_dir / "logs"
     status_dir = repo_dir / "status"
@@ -109,13 +131,18 @@ def load_config(config_path: str = "config.toml") -> Config:
     if adapter_dir and not adapter_dir.is_absolute():
         adapter_dir = (repo_dir / adapter_dir).resolve()
 
-    for d in [raw_dir, sft_dir, cache_dir, logs_dir, status_dir, Path(cfg["model_cache_dir"]), Path(cfg["output_dir"])]:
+    for d in [raw_dir, sft_dir, profiles_dir, memory_dir, cache_dir, logs_dir, status_dir]:
         d.mkdir(parents=True, exist_ok=True)
     
     run_name = cfg["run_name"]
     raw_jsonl = raw_dir / f"{run_name}_dialogues.jsonl"
     train_json = sft_dir / f"{run_name}_chat_train.json"
     valid_json = sft_dir / f"{run_name}_chat_valid.json"
+    profile_json = profiles_dir / f"{run_name}_profile.json"
+    scene_memory_jsonl = memory_dir / f"{run_name}_scenes.jsonl"
+    memory_index_json = memory_dir / f"{run_name}_bm25.json"
+    raft_train_json = sft_dir / f"{run_name}_raft_train.json"
+    raft_valid_json = sft_dir / f"{run_name}_raft_valid.json"
     
     return Config(
         # 基础输入
@@ -148,6 +175,21 @@ def load_config(config_path: str = "config.toml") -> Config:
         valid_ratio=cfg["valid_ratio"],
         max_conversations=cfg["max_conversations"],
         seed=cfg["seed"],
+
+        # 记忆 / RAFT
+        enable_memory=cfg.get("enable_memory", False),
+        memory_backend=cfg.get("memory_backend", "bm25"),
+        top_k_memory=cfg.get("top_k_memory", 3),
+        max_memory_chars=cfg.get("max_memory_chars", 1800),
+        max_one_scene_chars=cfg.get("max_one_scene_chars", 600),
+        prefer_target_present=cfg.get("prefer_target_present", True),
+        exclude_narrator_only=cfg.get("exclude_narrator_only", True),
+        sft_mode=cfg.get("sft_mode", "style"),
+        style_data_ratio=cfg.get("style_data_ratio", 1.0),
+        raft_data_ratio=cfg.get("raft_data_ratio", 0.0),
+        raft_include_distractors=cfg.get("raft_include_distractors", True),
+        raft_no_answer_ratio=cfg.get("raft_no_answer_ratio", 0.1),
+        roleplay_mode=cfg.get("roleplay_mode", "in_character"),
         
         # 训练
         per_device_train_batch_size=cfg["per_device_train_batch_size"],
@@ -183,4 +225,9 @@ def load_config(config_path: str = "config.toml") -> Config:
         raw_jsonl=raw_jsonl,
         train_json=train_json,
         valid_json=valid_json,
+        profile_json=profile_json,
+        scene_memory_jsonl=scene_memory_jsonl,
+        memory_index_json=memory_index_json,
+        raft_train_json=raft_train_json,
+        raft_valid_json=raft_valid_json,
     )

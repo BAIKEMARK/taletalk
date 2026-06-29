@@ -34,6 +34,21 @@ valid_ratio = 0.05  # 验证集比例
 max_conversations = 0  # 最多生成多少条对话，0表示不限制
 seed = 42  # 随机种子
 
+# ====== 角色记忆 / RAFT配置 ======
+enable_memory = true  # 是否构建角色记忆库，并在SFT/推理中使用
+memory_backend = "bm25"  # 当前支持: bm25
+top_k_memory = 3  # 推理时检索多少条记忆
+max_memory_chars = 1800  # system prompt中记忆片段总长度上限
+max_one_scene_chars = 600  # 单条记忆片段长度上限
+prefer_target_present = true  # 优先使用目标角色在场的记忆
+exclude_narrator_only = true  # 默认排除角色不该知道的旁白知识
+sft_mode = "mixed"  # 可选: style / raft / mixed。mixed会混合旧风格数据和带记忆的RAFT数据
+style_data_ratio = 0.35
+raft_data_ratio = 0.65
+raft_include_distractors = true  # 预留：后续用于加入干扰记忆
+raft_no_answer_ratio = 0.1  # 预留：后续用于生成资料不足样本
+roleplay_mode = "in_character"  # 预留：未来可支持 analysis / omniscient 等模式
+
 # ====== LoRA训练配置 ======
 per_device_train_batch_size = 4
 gradient_accumulation_steps = 4

@@ -27,6 +27,20 @@ valid_ratio = 0.05
 max_conversations = 0
 seed = 42
 
+enable_memory = true
+memory_backend = "bm25"
+top_k_memory = 3
+max_memory_chars = 1800
+max_one_scene_chars = 600
+prefer_target_present = true
+exclude_narrator_only = true
+sft_mode = "mixed"
+style_data_ratio = 0.35
+raft_data_ratio = 0.65
+raft_include_distractors = true
+raft_no_answer_ratio = 0.1
+roleplay_mode = "in_character"
+
 per_device_train_batch_size = 4
 gradient_accumulation_steps = 4
 learning_rate = 1e-4
