@@ -21,6 +21,24 @@ def test_preprocess_scenes_keep_offsets(tmp_path):
         assert source[scene.source_start : scene.source_end].strip() == scene.raw_text
 
 
+def test_preprocess_aligns_large_raw_dialogue_without_skip(tmp_path):
+    novel = tmp_path / "novel.txt"
+    raw = tmp_path / "raw.jsonl"
+    novel.write_text("第一章\n\n齐夏说：先确认规则，再判断出口。", encoding="utf-8")
+    rows = [
+        {"chunk_id": index, "dialogue_index": 0, "role": "路人", "dialogue": f"无关台词{index:05d}"}
+        for index in range(6000)
+    ]
+    rows.append({"chunk_id": 9999, "dialogue_index": 0, "role": "齐夏", "dialogue": "先确认规则，再判断出口。"})
+    raw.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
+
+    scenes, report = build_scene_skeletons(novel, raw, max_chars=100, overlap_chars=0)
+
+    assert report["alignment_strategy"] == "keyed_exact_dialogue_match"
+    assert scenes[0].dialogue_alignment == "matched"
+    assert scenes[0].dialogues == [{"role": "齐夏", "dialogue": "先确认规则，再判断出口。"}]
+
+
 def test_memory_pack_render_protocol():
     rendered = render_memory_pack(
         [

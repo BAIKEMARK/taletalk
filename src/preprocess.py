@@ -31,15 +31,12 @@ def build_scene_skeletons(
     text = novel_txt.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
     scenes = _split_text_to_scenes(text, max_chars=max_chars, overlap_chars=overlap_chars)
     raw_dialogues = _load_raw_dialogues(raw_dialogue_jsonl) if raw_dialogue_jsonl and raw_dialogue_jsonl.exists() else []
-    alignment_skipped_reason = ""
-    if len(raw_dialogues) > 5000:
-        alignment_skipped_reason = f"raw dialogue too large for exact smoke alignment: {len(raw_dialogues)}"
-        raw_dialogues = []
+    dialogue_matcher = DialogueMatcher(raw_dialogues)
 
     aligned_dialogue_count = 0
     missing_dialogue_count = 0
     for scene in scenes:
-        matched = _match_dialogues(scene.raw_text, raw_dialogues)
+        matched = dialogue_matcher.match(scene.raw_text)
         scene.dialogues = [{"role": row["role"], "dialogue": row["dialogue"]} for row in matched]
         scene.source_refs = [
             {"raw_dialogue_id": row.get("id") or f"chunk_{row.get('chunk_id', '')}_{row.get('dialogue_index', '')}", "match_type": "text"}
@@ -66,7 +63,7 @@ def build_scene_skeletons(
         )
         if scenes
         else 0.0,
-        "alignment_skipped_reason": alignment_skipped_reason,
+        "alignment_strategy": "keyed_exact_dialogue_match",
         "source_file": str(novel_txt),
         "scene_max_chars": max_chars,
         "scene_overlap_chars": overlap_chars,
@@ -182,13 +179,41 @@ def _load_raw_dialogues(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _match_dialogues(raw_text: str, raw_dialogues: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    matched: list[dict[str, Any]] = []
-    for row in raw_dialogues:
-        dialogue = str(row.get("dialogue", "")).strip()
-        chunk_text = str(row.get("chunk_text", "")).strip()
-        if dialogue and dialogue in raw_text:
-            matched.append(row)
-        elif chunk_text and chunk_text[:80] in raw_text:
-            matched.append(row)
-    return matched[:20]
+class DialogueMatcher:
+    def __init__(self, raw_dialogues: list[dict[str, Any]], key_size: int = 6):
+        self.key_size = key_size
+        self.by_key: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+        for row in raw_dialogues:
+            dialogue = _normalize_match_text(str(row.get("dialogue", "")))
+            if len(dialogue) < key_size:
+                continue
+            key = dialogue[:key_size]
+            self.by_key.setdefault(key, []).append((dialogue, row))
+
+    def match(self, raw_text: str, limit: int = 20) -> list[dict[str, Any]]:
+        text = _normalize_match_text(raw_text)
+        if not text or not self.by_key:
+            return []
+        matched: list[dict[str, Any]] = []
+        seen_rows: set[int] = set()
+        for key in _candidate_keys(text, self.key_size):
+            for dialogue, row in self.by_key.get(key, []):
+                row_id = id(row)
+                if row_id in seen_rows:
+                    continue
+                if dialogue in text:
+                    matched.append(row)
+                    seen_rows.add(row_id)
+                    if len(matched) >= limit:
+                        return matched
+        return matched
+
+
+def _normalize_match_text(text: str) -> str:
+    return re.sub(r"\s+", "", text)
+
+
+def _candidate_keys(text: str, key_size: int) -> set[str]:
+    if len(text) < key_size:
+        return set()
+    return {text[index : index + key_size] for index in range(0, len(text) - key_size + 1)}
