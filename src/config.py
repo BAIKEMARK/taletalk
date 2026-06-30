@@ -57,12 +57,14 @@ class Config:
     memory_backend: str
     retrieval_mode: str
     embedding_backend: str
+    embedding_provider: str
     embedding_base_url: str
     embedding_api_key: str
     embedding_model: str
     embedding_batch_size: int
     embedding_dimensions: int
     reranker_backend: str
+    reranker_provider: str
     reranker_base_url: str
     reranker_api_key: str
     reranker_model: str
@@ -154,7 +156,8 @@ def load_config(config_path: str = "config.toml") -> Config:
     repo_dir = Path.cwd().resolve()
     while repo_dir != repo_dir.parent and not (repo_dir / "extract").is_dir() and not (repo_dir / "src").is_dir():
         repo_dir = repo_dir.parent
-    load_repo_env(repo_dir)
+    if (repo_dir / ".git").exists():
+        load_repo_env(repo_dir)
     
     novel_txt = Path(cfg["novel_txt"])
     if not novel_txt.is_absolute():
@@ -266,13 +269,15 @@ def load_config(config_path: str = "config.toml") -> Config:
         generation_checkpoint_dir=generation_checkpoint_dir,
         memory_backend=cfg.get("memory_backend", "bm25"),
         retrieval_mode=cfg.get("retrieval_mode", cfg.get("memory_backend", "bm25")),
-        embedding_backend=cfg.get("embedding_backend", "auto"),
+        embedding_backend=cfg.get("embedding_backend", "local"),
+        embedding_provider=cfg.get("embedding_provider", "openai_compatible"),
         embedding_base_url=cfg.get("embedding_base_url", ""),
         embedding_api_key=cfg.get("embedding_api_key", ""),
         embedding_model=cfg.get("embedding_model", "BAAI/bge-m3"),
         embedding_batch_size=cfg.get("embedding_batch_size", 64),
         embedding_dimensions=cfg.get("embedding_dimensions", 64),
-        reranker_backend=cfg.get("reranker_backend", "auto"),
+        reranker_backend=cfg.get("reranker_backend", "local"),
+        reranker_provider=cfg.get("reranker_provider", "openai_compatible"),
         reranker_base_url=cfg.get("reranker_base_url", ""),
         reranker_api_key=cfg.get("reranker_api_key", ""),
         reranker_model=cfg.get("reranker_model", "BAAI/bge-reranker-v2-m3"),

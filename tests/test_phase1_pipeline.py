@@ -124,6 +124,20 @@ def test_cloud_embedding_and_reranker_clients(tmp_path, monkeypatch):
         assert [item["scene_id"] for item in ranked] == ["b", "a"]
         assert "/embeddings" in server.paths
         assert "/rerank" in server.paths
+
+        server.paths.clear()
+        cfg.reranker_provider = "parallel_cloud"
+        ranked = rerank_items(
+            cfg,
+            "规则",
+            [
+                {"scene_id": "a", "text": "余念安"},
+                {"scene_id": "b", "text": "规则"},
+            ],
+            top_k=2,
+        )
+        assert [item["scene_id"] for item in ranked] == ["b", "a"]
+        assert "/p002/rerank" in server.paths
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -170,7 +184,17 @@ teacher_batch_size = 2
 teacher_concurrency = 1
 memory_backend = "bm25"
 retrieval_mode = "bm25"
+embedding_backend = "local"
+embedding_provider = "openai_compatible"
+embedding_base_url = ""
+embedding_api_key = ""
 embedding_model = "BAAI/bge-m3"
+embedding_batch_size = 64
+embedding_dimensions = 64
+reranker_backend = "local"
+reranker_provider = "openai_compatible"
+reranker_base_url = ""
+reranker_api_key = ""
 reranker_model = "BAAI/bge-reranker-v2-m3"
 use_reranker = false
 bm25_top_k = 20
@@ -226,7 +250,7 @@ def _start_fake_retrieval_server():
                 for text in payload["input"]:
                     vectors.append([1.0, 0.0] if "余念安" in text else [0.0, 1.0])
                 body = {"data": [{"embedding": vector} for vector in vectors]}
-            elif self.path == "/rerank":
+            elif self.path in {"/rerank", "/p002/rerank"}:
                 rows = []
                 query = payload["query"]
                 for index, document in enumerate(payload["documents"]):

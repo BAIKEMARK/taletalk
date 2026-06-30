@@ -108,7 +108,7 @@ def rerank_items(config: Config, query: str, items: list[dict[str, Any]], top_k:
         return items[:top_k]
 
     documents = [str(item.get("text", "")) for item in items]
-    ranked = _call_rerank_api(base_url, api_key, model, query, documents, top_k)
+    ranked = _call_rerank_api(base_url, api_key, model, query, documents, top_k, _reranker_provider(config))
     return [items[index] for index, _score in ranked if 0 <= index < len(items)]
 
 
@@ -130,9 +130,7 @@ def read_npy_float32(path: Path) -> list[list[float]]:
 
 
 def _call_embedding_api(base_url: str, api_key: str, model: str, texts: list[str]) -> list[list[float]]:
-    url = base_url.rstrip("/")
-    if not url.endswith("/embeddings"):
-        url = f"{url}/embeddings"
+    url = _embedding_url(base_url)
     payload = {"model": model, "input": texts}
     result = _post_json(url, api_key, payload)
     if isinstance(result.get("data"), list):
@@ -151,10 +149,9 @@ def _call_rerank_api(
     query: str,
     documents: list[str],
     top_k: int,
+    provider: str,
 ) -> list[tuple[int, float]]:
-    url = base_url.rstrip("/")
-    if not url.endswith("/rerank"):
-        url = f"{url}/rerank"
+    url = _rerank_url(base_url, provider)
     payload = {"model": model, "query": query, "documents": documents, "top_n": top_k}
     result = _post_json(url, api_key, payload)
     rows = result.get("results") or result.get("data") or []
@@ -188,6 +185,29 @@ def _post_json(url: str, api_key: str, payload: dict[str, Any]) -> dict[str, Any
         raise RuntimeError(f"{url} failed: HTTP {exc.code} {detail}") from exc
 
 
+def _embedding_url(base_url: str) -> str:
+    url = _normalize_base_url(base_url)
+    if url.endswith("/embeddings"):
+        return url
+    return f"{url}/embeddings"
+
+
+def _rerank_url(base_url: str, provider: str) -> str:
+    url = _normalize_base_url(base_url)
+    if url.endswith("/rerank"):
+        return url
+    if provider == "parallel_cloud":
+        return f"{url}/p002/rerank"
+    return f"{url}/rerank"
+
+
+def _normalize_base_url(base_url: str) -> str:
+    url = base_url.strip().rstrip("/")
+    if url and "://" not in url:
+        url = f"https://{url}"
+    return url
+
+
 def _embedding_backend(config: Config) -> str:
     backend = config.embedding_backend
     if backend == "auto":
@@ -214,6 +234,10 @@ def _embedding_model(config: Config) -> str:
     return config.embedding_model or os.getenv("EMBEDDING_MODEL", "") or os.getenv("EMBEDDING_MODEL_NAME", "")
 
 
+def _embedding_provider(config: Config) -> str:
+    return config.embedding_provider or os.getenv("EMBEDDING_PROVIDER", "")
+
+
 def _reranker_base_url(config: Config) -> str:
     return config.reranker_base_url or os.getenv("RERANKER_BASE_URL", "")
 
@@ -224,6 +248,10 @@ def _reranker_api_key(config: Config) -> str:
 
 def _reranker_model(config: Config) -> str:
     return config.reranker_model or os.getenv("RERANKER_MODEL", "") or os.getenv("RERANKER_MODEL_NAME", "")
+
+
+def _reranker_provider(config: Config) -> str:
+    return config.reranker_provider or os.getenv("RERANKER_PROVIDER", "")
 
 
 def _write_embedding_meta(config: Config, scenes: list[SceneMemory], provider: str, dimensions: int) -> None:
