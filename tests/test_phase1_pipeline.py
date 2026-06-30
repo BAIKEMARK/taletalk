@@ -4,6 +4,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from src.config import load_config
 from src.build_sft import _build_phase_one_sft
+from src.eval_export import _build_eval_questions
+from src.train import _build_dataset_info
 from src.memory import CharacterProfile, SceneMemory, read_scene_memories, write_profile, write_scene_memories
 from src.memory_pack import render_memory_pack
 from src.one_pass_generation import _load_completed
@@ -260,7 +262,55 @@ def test_memory_aware_mixed_sft_includes_style_samples(tmp_path, monkeypatch):
     rows = _build_phase_one_sft(cfg)
     sample_types = {row["metadata"]["sample_type"] for row in rows}
 
-    assert sample_types == {"grounded_fact", "style_dialogue"}
+    assert {"grounded_fact", "style_dialogue"}.issubset(sample_types)
+
+
+def test_phase_two_sft_includes_required_training_types(tmp_path, monkeypatch):
+    _write_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config("config.toml")
+    cfg.sft_mode = "mixed"
+    cfg.style_data_ratio = 1.0
+    cfg.raft_data_ratio = 1.0
+    _write_minimal_memory_sft_inputs(cfg)
+
+    rows = _build_phase_one_sft(cfg)
+    sample_types = {row["metadata"]["sample_type"] for row in rows}
+
+    assert {
+        "style_dialogue",
+        "grounded_fact",
+        "relationship",
+        "motivation",
+        "false_premise",
+        "boundary_unknown",
+    }.issubset(sample_types)
+
+
+def test_eval_questions_cover_phase_two_categories():
+    candidates = [
+        {"id": f"{category}_{index}", "question": f"{category}?", "sample_type": category, "source_scene_ids": []}
+        for category in ["grounded_fact", "relationship", "motivation", "false_premise", "boundary_unknown"]
+        for index in range(2)
+    ]
+
+    questions = _build_eval_questions(candidates, limit=5)
+    categories = {row["category"] for row in questions}
+
+    assert categories == {"grounded_fact", "relationship", "motivation", "false_premise", "boundary_unknown"}
+
+
+def test_train_dataset_info_uses_sharegpt_format(tmp_path, monkeypatch):
+    _write_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config("config.toml")
+
+    info = _build_dataset_info(cfg)
+
+    assert info["taletalk_custom"]["formatting"] == "sharegpt"
+    assert info["taletalk_custom"]["tags"]["role_tag"] == "from"
+    assert info["taletalk_custom"]["tags"]["user_tag"] == "human"
+    assert info["taletalk_custom_valid"]["file_name"] == "phase1_test_chat_valid.json"
 
 
 def test_training_memory_pack_can_skip_reranker(tmp_path, monkeypatch):
@@ -351,7 +401,8 @@ def test_training_semantic_query_embeddings_are_batched(tmp_path, monkeypatch):
     rows = _build_phase_one_sft(cfg)
 
     assert rows
-    assert calls == [["出口在哪里？", "规则怎么判断？"]]
+    assert len(calls) == 1
+    assert calls[0][:2] == ["出口在哪里？", "规则怎么判断？"]
 
 
 def _write_candidates(cfg, candidates):

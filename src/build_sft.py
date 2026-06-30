@@ -263,6 +263,7 @@ def _build_phase_one_sft(config: Config) -> list[dict]:
     profile = read_profile(config.profile_json)
     scenes = read_scene_memories(config.scene_memory_jsonl)
     candidates = _filter_candidates(_load_jsonl(config.raft_candidates_raw_jsonl))
+    candidates = candidates + _build_phase_two_candidate_variants(config, candidates, scenes)
     index = BM25MemoryIndex.from_scenes(scenes)
     training_retrieval_mode = config.training_retrieval_mode
     semantic_index = None
@@ -330,7 +331,81 @@ def _build_phase_one_sft(config: Config) -> list[dict]:
         )
     elif config.sft_mode == "style":
         rows = _build_style_samples_from_raw_dialogue(config)
+    if config.target_train_samples > 0 and len(rows) > config.target_train_samples:
+        random.Random(config.seed).shuffle(rows)
+        rows = rows[: config.target_train_samples]
     return rows
+
+
+def _build_phase_two_candidate_variants(
+    config: Config,
+    candidates: list[dict],
+    scenes,
+) -> list[dict]:
+    scenes_by_id = {scene.scene_id: scene for scene in scenes}
+    variants: list[dict] = []
+    for candidate in candidates:
+        refs = [ref for ref in candidate.get("source_scene_ids", []) if ref in scenes_by_id]
+        if not refs:
+            continue
+        scene = scenes_by_id[refs[0]]
+        base_id = candidate["id"]
+        other = next((name for name in scene.characters if name not in config.target_role_aliases), "")
+        question = f"你怎么看{other}？" if other else "你会怎么判断身边的人是否可信？"
+        answer = (
+            f"我不会急着评价{other}。能确认的只有眼前这些行为，判断一个人，要看他在规则和危险面前怎么选择。"
+            if other
+            else "我不会凭感觉相信谁。先看他说的话能不能被验证，再看他在危险面前会不会暴露真正的目的。"
+        )
+        variants.append(
+            {
+                "id": f"{base_id}_relationship",
+                "sample_type": "relationship",
+                "question": question,
+                "answer": answer,
+                "source_scene_ids": refs[:1],
+                "knowledge_level": candidate.get("knowledge_level", "first_hand"),
+                "answer_policy": "answer_from_memory",
+            }
+        )
+        if scene.events:
+            event = str(scene.events[0]).strip("。")
+            variants.append(
+                {
+                    "id": f"{base_id}_motivation",
+                    "sample_type": "motivation",
+                    "question": f"你为什么要{event}？",
+                    "answer": "因为在这里，先活下来才有资格谈别的。情绪不能替我判断，规则和证据才可以。",
+                    "source_scene_ids": refs[:1],
+                    "knowledge_level": candidate.get("knowledge_level", "first_hand"),
+                    "answer_policy": "answer_from_memory",
+                }
+            )
+        variants.append(
+            {
+                "id": f"{base_id}_false_premise",
+                "sample_type": "false_premise",
+                "question": "所以你当时已经完全相信他们了，对吗？",
+                "answer": "不对。我不会因为一句话就完全相信任何人。能相信的只有已经验证过的线索。",
+                "source_scene_ids": refs[:1],
+                "knowledge_level": candidate.get("knowledge_level", "first_hand"),
+                "answer_policy": "correct_false_premise",
+                "must_not_claim": ["完全相信他人"],
+            }
+        )
+        variants.append(
+            {
+                "id": f"{base_id}_boundary_unknown",
+                "sample_type": "boundary_unknown",
+                "question": "你知道所有人在背后怎么评价你吗？",
+                "answer": "不知道。没被我听见、没被证据证明的事，我不会当成事实。",
+                "source_scene_ids": [],
+                "knowledge_level": "uncertain",
+                "answer_policy": "insufficient_memory",
+                "must_not_claim": ["知道所有人的私下想法"],
+            }
+        )
+    return variants
 
 
 def _build_style_samples_from_raw_dialogue(config: Config) -> list[dict]:

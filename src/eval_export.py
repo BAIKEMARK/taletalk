@@ -19,7 +19,7 @@ def run_eval(config: Config) -> None:
 
     train_rows = _load_json(config.train_json)
     valid_rows = _load_json(config.valid_json) if config.valid_json.exists() else []
-    candidates = _load_jsonl(config.raft_candidates_raw_jsonl)
+    candidates = _rows_to_eval_candidates(train_rows + valid_rows)
     packs = read_memory_packs(config.raft_memory_packs_jsonl) if config.raft_memory_packs_jsonl.exists() else []
 
     eval_questions = _build_eval_questions(candidates, config.eval_question_count)
@@ -131,16 +131,54 @@ def _write_jsonl(rows: list[dict[str, Any]], path: Path) -> None:
 
 def _build_eval_questions(candidates: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     questions: list[dict[str, Any]] = []
-    for candidate in candidates[:limit]:
-        questions.append(
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for candidate in candidates:
+        category = candidate.get("sample_type", "grounded_fact")
+        buckets.setdefault(category, []).append(candidate)
+    preferred = ["grounded_fact", "relationship", "motivation", "false_premise", "boundary_unknown", "style_dialogue"]
+    ordered_categories = [category for category in preferred if category in buckets]
+    ordered_categories.extend(category for category in buckets if category not in ordered_categories)
+    index = 0
+    while len(questions) < limit and ordered_categories:
+        progressed = False
+        for category in ordered_categories:
+            rows = buckets.get(category, [])
+            if index >= len(rows):
+                continue
+            candidate = rows[index]
+            questions.append(
+                {
+                    "id": f"eval_{candidate.get('id')}",
+                    "question": candidate.get("question"),
+                    "expected_source_scene_ids": candidate.get("source_scene_ids", []),
+                    "category": category,
+                }
+            )
+            progressed = True
+            if len(questions) >= limit:
+                break
+        if not progressed:
+            break
+        index += 1
+    return questions
+
+
+def _rows_to_eval_candidates(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        conversations = row.get("conversations") or []
+        if not conversations:
+            continue
+        metadata = row.get("metadata") or {}
+        candidates.append(
             {
-                "id": f"eval_{candidate.get('id')}",
-                "question": candidate.get("question"),
-                "expected_source_scene_ids": candidate.get("source_scene_ids", []),
-                "category": candidate.get("sample_type", "grounded_fact"),
+                "id": row.get("id"),
+                "question": conversations[0].get("value", ""),
+                "source_scene_ids": metadata.get("source_scene_ids", []),
+                "sample_type": metadata.get("sample_type", "grounded_fact"),
             }
         )
-    return questions
+    return candidates
 
 
 def _has_format_error(row: dict[str, Any]) -> bool:

@@ -24,6 +24,34 @@ def _template_for_model(model_id: str) -> str:
         return "qwen3"
     return "qwen"
 
+
+def _build_dataset_info(config: Config) -> dict:
+    columns = {
+        "messages": "conversations",
+        "system": "system",
+    }
+    tags = {
+        "role_tag": "from",
+        "content_tag": "value",
+        "user_tag": "human",
+        "assistant_tag": "gpt",
+    }
+    return {
+        "taletalk_custom": {
+            "file_name": config.run_name + "_chat_train.json",
+            "formatting": "sharegpt",
+            "columns": columns,
+            "tags": tags,
+        },
+        "taletalk_custom_valid": {
+            "file_name": config.run_name + "_chat_valid.json",
+            "formatting": "sharegpt",
+            "columns": columns,
+            "tags": tags,
+        },
+    }
+
+
 def run_train(config: Config) -> None:
     """训练角色LoRA"""
     step_name = "train"
@@ -84,24 +112,7 @@ def run_train(config: Config) -> None:
     logger.info(f"训练配置已生成: {runtime_config}")
     
     # 生成dataset_info.json
-    dataset_info = {
-        "taletalk_custom": {
-            "file_name": config.run_name + "_chat_train.json",
-            "file_sha1": "",
-            "columns": {
-                "messages": "conversations",
-                "system": "system",
-            }
-        },
-        "taletalk_custom_valid": {
-            "file_name": config.run_name + "_chat_valid.json",
-            "file_sha1": "",
-            "columns": {
-                "messages": "conversations",
-                "system": "system",
-            }
-        }
-    }
+    dataset_info = _build_dataset_info(config)
     
     with open(config.sft_dir / "dataset_info.json", "w") as f:
         json.dump(dataset_info, f, ensure_ascii=False, indent=2)
