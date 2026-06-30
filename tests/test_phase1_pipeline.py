@@ -292,12 +292,74 @@ def test_training_memory_pack_can_skip_reranker(tmp_path, monkeypatch):
     def fail_rerank(*args, **kwargs):
         raise AssertionError("training build should not call reranker")
 
-    monkeypatch.setattr("src.semantic_retrieval.embed_texts", fail_embedding)
+    monkeypatch.setattr("src.build_sft.embed_texts", fail_embedding)
     monkeypatch.setattr("src.build_sft.rerank_items", fail_rerank)
 
     rows = _build_phase_one_sft(cfg)
 
     assert rows
+
+
+def test_training_semantic_query_embeddings_are_batched(tmp_path, monkeypatch):
+    _write_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config("config.toml")
+    cfg.sft_mode = "mixed"
+    cfg.training_retrieval_mode = "hybrid"
+    cfg.embedding_backend = "cloud"
+    cfg.embedding_base_url = "https://example.invalid/v1"
+    cfg.embedding_api_key = "test-key"
+    cfg.embedding_model = "test-embedding"
+    cfg.use_reranker = False
+    cfg.training_use_reranker = False
+    _write_minimal_memory_sft_inputs(cfg)
+    _write_candidates(
+        cfg,
+        [
+            {
+                "id": "cand_1",
+                "sample_type": "grounded_fact",
+                "question": "出口在哪里？",
+                "answer": "我先确认规则。",
+                "source_scene_ids": ["scene_000001"],
+                "knowledge_level": "first_hand",
+                "answer_policy": "answer_from_memory",
+            },
+            {
+                "id": "cand_2",
+                "sample_type": "grounded_fact",
+                "question": "规则怎么判断？",
+                "answer": "先看它是不是在替你做选择。",
+                "source_scene_ids": ["scene_000002"],
+                "knowledge_level": "first_hand",
+                "answer_policy": "answer_from_memory",
+            },
+        ],
+    )
+
+    cfg.embedding_backend = "local"
+    write_embedding_artifacts(cfg, read_scene_memories(cfg.scene_memory_jsonl))
+    cfg.embedding_backend = "cloud"
+    calls = []
+
+    def fake_embed_texts(_config, texts):
+        calls.append(list(texts))
+        return [[1.0, 0.0] if "出口" in text else [0.0, 1.0] for text in texts]
+
+    monkeypatch.setattr("src.build_sft.embed_texts", fake_embed_texts)
+
+    rows = _build_phase_one_sft(cfg)
+
+    assert rows
+    assert calls == [["出口在哪里？", "规则怎么判断？"]]
+
+
+def _write_candidates(cfg, candidates):
+    cfg.raft_candidates_raw_jsonl.parent.mkdir(parents=True, exist_ok=True)
+    cfg.raft_candidates_raw_jsonl.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in candidates) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _write_minimal_memory_sft_inputs(cfg):
@@ -365,9 +427,9 @@ def _write_minimal_memory_sft_inputs(cfg):
         + "\n",
         encoding="utf-8",
     )
-    cfg.raft_candidates_raw_jsonl.parent.mkdir(parents=True, exist_ok=True)
-    cfg.raft_candidates_raw_jsonl.write_text(
-        json.dumps(
+    _write_candidates(
+        cfg,
+        [
             {
                 "id": "cand_1",
                 "sample_type": "grounded_fact",
@@ -376,11 +438,8 @@ def _write_minimal_memory_sft_inputs(cfg):
                 "source_scene_ids": ["scene_000001"],
                 "knowledge_level": "first_hand",
                 "answer_policy": "answer_from_memory",
-            },
-            ensure_ascii=False,
-        )
-        + "\n",
-        encoding="utf-8",
+            }
+        ],
     )
 
 

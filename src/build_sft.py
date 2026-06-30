@@ -12,7 +12,7 @@ from .memory import read_dialogue_jsonl, read_profile, read_scene_memories
 from .memory_pack import build_memory_packs, write_memory_packs
 from .prompting import build_roleplay_system_prompt_from_memory_pack
 from .retrieval import BM25MemoryIndex
-from .semantic_retrieval import SemanticMemoryIndex, rerank_items
+from .semantic_retrieval import SemanticMemoryIndex, embed_texts, rerank_items
 from .utils import init_logger, check_step_done, mark_step_done, run_with_progress
 
 def _load_jsonl(path: Path) -> List[dict]:
@@ -266,8 +266,16 @@ def _build_phase_one_sft(config: Config) -> list[dict]:
     index = BM25MemoryIndex.from_scenes(scenes)
     training_retrieval_mode = config.training_retrieval_mode
     semantic_index = None
+    semantic_query_vectors = None
     if training_retrieval_mode in {"embedding", "semantic", "hybrid"} and config.embedding_npy.exists():
         semantic_index = SemanticMemoryIndex.from_artifacts(scenes, config.embedding_npy, config)
+        if semantic_index.vectors:
+            questions = [str(candidate.get("question", "")) for candidate in candidates]
+            vectors = embed_texts(config, questions)
+            semantic_query_vectors = {
+                candidate["id"]: vector
+                for candidate, vector in zip(candidates, vectors)
+            }
     rerank_fn = None
     if config.training_use_reranker:
         rerank_fn = lambda query, items, top_k: rerank_items(config, query, items, top_k)
@@ -282,6 +290,7 @@ def _build_phase_one_sft(config: Config) -> list[dict]:
         embedding_top_k=config.embedding_top_k,
         rerank_top_k=config.rerank_top_k,
         semantic_index=semantic_index,
+        semantic_query_vectors=semantic_query_vectors,
         rerank_fn=rerank_fn,
     )
     write_memory_packs(packs, config.raft_memory_packs_jsonl)

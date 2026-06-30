@@ -40,6 +40,16 @@ class SemanticMemoryIndex:
         if not self.vectors:
             return []
         query_vector = embed_query(self.config, query, dimensions=len(self.vectors[0]))
+        return self.search_with_vector(query_vector, top_k=top_k, exclude_narrator_only=exclude_narrator_only)
+
+    def search_with_vector(
+        self,
+        query_vector: list[float],
+        top_k: int,
+        exclude_narrator_only: bool = True,
+    ) -> list[SemanticSearchResult]:
+        if not self.vectors:
+            return []
         if len(query_vector) != len(self.vectors[0]):
             return []
         query_vector = _normalize(query_vector)

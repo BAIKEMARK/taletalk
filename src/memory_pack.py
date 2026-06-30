@@ -34,6 +34,7 @@ def build_memory_packs(
     embedding_top_k: int = 20,
     rerank_top_k: int = 5,
     semantic_index: Any | None = None,
+    semantic_query_vectors: dict[str, list[float]] | None = None,
     rerank_fn: Callable[[str, list[dict[str, Any]], int], list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     by_id = {scene.scene_id: scene for scene in scenes}
@@ -57,6 +58,7 @@ def build_memory_packs(
             embedding_top_k=embedding_top_k,
             rerank_top_k=rerank_top_k,
             semantic_index=semantic_index,
+            semantic_query_vector=(semantic_query_vectors or {}).get(candidate["id"]),
             rerank_fn=rerank_fn,
         )
         if retrieval_items:
@@ -111,7 +113,8 @@ def retrieve_memory_items(
     embedding_top_k: int,
     rerank_top_k: int,
     semantic_index: Any | None,
-    rerank_fn: Callable[[str, list[dict[str, Any]], int], list[dict[str, Any]]] | None,
+    semantic_query_vector: list[float] | None = None,
+    rerank_fn: Callable[[str, list[dict[str, Any]], int], list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     excluded = set(excluded_scene_ids or [])
     scores: dict[str, float] = {}
@@ -126,7 +129,15 @@ def retrieve_memory_items(
             scores[result.scene.scene_id] = scores.get(result.scene.scene_id, 0.0) + float(result.score)
 
     if semantic_index is not None and mode in {"embedding", "semantic", "hybrid"}:
-        for result in semantic_index.search(question, top_k=embedding_top_k, exclude_narrator_only=True):
+        if semantic_query_vector is not None:
+            semantic_results = semantic_index.search_with_vector(
+                semantic_query_vector,
+                top_k=embedding_top_k,
+                exclude_narrator_only=True,
+            )
+        else:
+            semantic_results = semantic_index.search(question, top_k=embedding_top_k, exclude_narrator_only=True)
+        for result in semantic_results:
             if result.scene.scene_id in excluded:
                 continue
             scenes_by_id[result.scene.scene_id] = result.scene
@@ -179,7 +190,8 @@ def _retrieve_supporting_items(
     embedding_top_k: int,
     rerank_top_k: int,
     semantic_index: Any | None,
-    rerank_fn: Callable[[str, list[dict[str, Any]], int], list[dict[str, Any]]] | None,
+    semantic_query_vector: list[float] | None = None,
+    rerank_fn: Callable[[str, list[dict[str, Any]], int], list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     if not refs:
         return []
@@ -193,6 +205,7 @@ def _retrieve_supporting_items(
         embedding_top_k=embedding_top_k,
         rerank_top_k=rerank_top_k,
         semantic_index=semantic_index,
+        semantic_query_vector=semantic_query_vector,
         rerank_fn=rerank_fn,
     )
 
